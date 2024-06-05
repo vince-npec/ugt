@@ -10,6 +10,7 @@ def load_data(uploaded_files):
     data_frames = []
     for uploaded_file in uploaded_files:
         try:
+            st.write(f"Reading file: {uploaded_file.name}")  # Debug statement
             df = pd.read_csv(uploaded_file, delimiter=';')
             # Infer device name from the filename
             df['device'] = uploaded_file.name.split('_')[0]  # Modify this line as needed
@@ -37,15 +38,19 @@ if data.empty:
     st.stop()
 
 # Convert timestamp to datetime
-data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
+try:
+    data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
+except Exception as e:
+    st.error(f"Error converting timestamp: {e}")
+    st.stop()
 
 # Handle missing values
 data = data.interpolate().ffill().bfill()
 
 # Get all column names for selection
 all_columns = data.columns.tolist()
-all_columns.remove('timestamp')
-all_columns.remove('device')
+if 'timestamp' in all_columns: all_columns.remove('timestamp')
+if 'device' in all_columns: all_columns.remove('device')
 
 # Get unique devices
 devices = data['device'].unique()
