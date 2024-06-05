@@ -1,38 +1,43 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import zipfile
+import io
 
 # Set page configuration
 st.set_page_config(layout="wide")
 
-# Function to load multiple CSV files into a single DataFrame
-def load_data(uploaded_files):
+# Function to load multiple CSV files from a ZIP into a single DataFrame
+def load_data_from_zip(zip_file):
     data_frames = []
-    for uploaded_file in uploaded_files:
-        try:
-            st.write(f"Reading file: {uploaded_file.name}")  # Debug statement
-            df = pd.read_csv(uploaded_file, delimiter=';')
-            # Infer device name from the filename
-            df['device'] = uploaded_file.name.split('_')[0]  # Modify this line as needed
-            data_frames.append(df)
-        except Exception as e:
-            st.error(f"Error reading {uploaded_file.name}: {e}")
+    with zipfile.ZipFile(zip_file) as z:
+        for filename in z.namelist():
+            if filename.endswith('.csv'):
+                with z.open(filename) as f:
+                    try:
+                        st.write(f"Reading file: {filename}")  # Debug statement
+                        df = pd.read_csv(f, delimiter=';')
+                        # Infer device name from the filename
+                        df['device'] = filename.split('_')[0]  # Modify this line as needed
+                        data_frames.append(df)
+                    except Exception as e:
+                        st.error(f"Error reading {filename}: {e}")
     
     if not data_frames:
-        st.error("No data frames were created from the uploaded files.")
+        st.error("No data frames were created from the ZIP file.")
         return pd.DataFrame()
     
     combined_df = pd.concat(data_frames, ignore_index=True)
     return combined_df
 
-# Upload CSV files
-uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
+# Upload ZIP file
+uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
 
-if not uploaded_files:
+if not uploaded_zip:
     st.stop()
 
-# Load data
-data = load_data(uploaded_files)
+# Load data from ZIP file
+data = load_data_from_zip(uploaded_zip)
 
 if data.empty:
     st.stop()
