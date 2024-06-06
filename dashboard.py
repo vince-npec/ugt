@@ -11,7 +11,6 @@ def load_data(uploaded_files):
     data_frames = []
     for uploaded_file in uploaded_files:
         try:
-            st.write(f"Reading file: {uploaded_file.name}")  # Debug statement
             df = pd.read_csv(uploaded_file, delimiter=';')
             # Infer device name from the filename
             df['device'] = uploaded_file.name.split('_')[0]  # Modify this line as needed
@@ -34,7 +33,6 @@ def load_data_from_zip(zip_file):
             if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
                 with z.open(filename) as f:
                     try:
-                        st.write(f"Reading file: {filename}")  # Debug statement
                         df = pd.read_csv(f, delimiter=';')
                         # Infer device name from the filename
                         df['device'] = filename.split('/')[0].split('_')[0]  # Modify this line as needed
