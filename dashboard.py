@@ -31,13 +31,13 @@ def load_data_from_zip(zip_file):
     data_frames = []
     with zipfile.ZipFile(zip_file) as z:
         for filename in z.namelist():
-            if filename.endswith('.csv'):
+            if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
                 with z.open(filename) as f:
                     try:
                         st.write(f"Reading file: {filename}")  # Debug statement
                         df = pd.read_csv(f, delimiter=';')
                         # Infer device name from the filename
-                        df['device'] = filename.split('_')[0]  # Modify this line as needed
+                        df['device'] = filename.split('/')[0].split('_')[0]  # Modify this line as needed
                         data_frames.append(df)
                     except Exception as e:
                         st.error(f"Error reading {filename}: {e}")
