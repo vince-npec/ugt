@@ -2,10 +2,29 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import zipfile
-import io
 
 # Set page configuration
 st.set_page_config(layout="wide")
+
+# Function to load multiple CSV files into a single DataFrame
+def load_data(uploaded_files):
+    data_frames = []
+    for uploaded_file in uploaded_files:
+        try:
+            st.write(f"Reading file: {uploaded_file.name}")  # Debug statement
+            df = pd.read_csv(uploaded_file, delimiter=';')
+            # Infer device name from the filename
+            df['device'] = uploaded_file.name.split('_')[0]  # Modify this line as needed
+            data_frames.append(df)
+        except Exception as e:
+            st.error(f"Error reading {uploaded_file.name}: {e}")
+    
+    if not data_frames:
+        st.error("No data frames were created from the uploaded files.")
+        return pd.DataFrame()
+    
+    combined_df = pd.concat(data_frames, ignore_index=True)
+    return combined_df
 
 # Function to load multiple CSV files from a ZIP into a single DataFrame
 def load_data_from_zip(zip_file):
@@ -30,14 +49,18 @@ def load_data_from_zip(zip_file):
     combined_df = pd.concat(data_frames, ignore_index=True)
     return combined_df
 
-# Upload ZIP file
+# Upload CSV or ZIP files
+st.title('Upload CSV or ZIP files')
+uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
 uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
 
-if not uploaded_zip:
-    st.stop()
+data = pd.DataFrame()
 
-# Load data from ZIP file
-data = load_data_from_zip(uploaded_zip)
+# Load data from uploaded files
+if uploaded_files:
+    data = load_data(uploaded_files)
+elif uploaded_zip:
+    data = load_data_from_zip(uploaded_zip)
 
 if data.empty:
     st.stop()
@@ -78,5 +101,9 @@ if selected_parameters and not filtered_data.empty:
             fig.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
     fig.update_layout(title='Time Series Comparison', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Display the filtered data as a table below the plot
+    st.subheader('Raw Data')
+    st.dataframe(filtered_data)
 else:
     st.write("No data available for the selected parameters and date range.")
