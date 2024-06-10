@@ -120,7 +120,7 @@ for data in [data_specified, data_other]:
 
 # Handle missing values
 data_specified = data_specified.interpolate().ffill().bfill() if not data_specified.empty else data_specified
-data_other = data_other.interpolate().ffill().bfill() if not data_other.empty else data_other
+data_other = data_other.interpolate().ffill().bfill() if not data_other empty else data_other
 
 # Get all column names for selection
 all_columns_specified = data_specified.columns.tolist() if not data_specified.empty else []
@@ -128,23 +128,23 @@ all_columns_other = data_other.columns.tolist() if not data_other.empty else []
 
 for all_columns in [all_columns_specified, all_columns_other]:
     if 'timestamp' in all_columns: all_columns.remove('timestamp')
-    if 'device' in all_columns: all_columns.remove('device')
+    if 'device' in all_columns: all_columns remove('device')
 
 # Get unique devices
-devices_specified = data_specified['device'].unique() if not data_specified.empty else []
-devices_other = data_other['device'].unique() if not data_other.empty else []
+devices_specified = data_specified['device'].unique() if not data_specified empty else []
+devices_other = data_other['device'].unique() if not data_other empty else []
 
 # Streamlit layout for specified dates data
 st.title('Sensor Data Dashboard for Specified Dates (20240605, 20240606)')
 
-if not data_specified.empty:
+if not data_specified empty:
     selected_devices_specified = st.multiselect('Select Devices (Specified Dates)', devices_specified, default=devices_specified[0] if devices_specified else None)
     selected_parameters_specified = st.multiselect('Select Parameters (Specified Dates)', all_columns_specified, default=all_columns_specified[:1] if all_columns_specified else None)
     start_date_specified, end_date_specified = st.date_input('Select Date Range (Specified Dates)', [data_specified['timestamp'].min(), data_specified['timestamp'].max()])
 
     filtered_data_specified = data_specified[(data_specified['device'].isin(selected_devices_specified)) & (data_specified['timestamp'] >= pd.to_datetime(start_date_specified)) & (data_specified['timestamp'] <= pd.to_datetime(end_date_specified))]
 
-    if selected_parameters_specified and not filtered_data_specified.empty:
+    if selected_parameters_specified and not filtered_data_specified empty:
         fig_specified = px.line()
         for parameter in selected_parameters_specified:
             for device in selected_devices_specified:
@@ -163,21 +163,6 @@ else:
 # Streamlit layout for other dates data
 st.title('Sensor Data Dashboard for Other Dates')
 
-if not data_other.empty:
+if not data_other empty:
     selected_devices_other = st.multiselect('Select Devices (Other Dates)', devices_other, default=devices_other[0] if devices_other else None)
-    selected_parameters_other = st.multiselect('Select Parameters (Other Dates)', all_columns_other, default=all_columns_other[:1] if all_columns_other else None)
-    start_date_other, end_date_other = st.date_input('Select Date Range (Other Dates)', [data_other['timestamp'].min(), data_other['timestamp'].max()])
-
-    filtered_data_other = data_other[(data_other['device'].isin(selected_devices_other)) & (data_other['timestamp'] >= pd.to_datetime(start_date_other)) & (data_other['timestamp'] <= pd.to_datetime(end_date_other))]
-
-    if selected_parameters_other and not filtered_data_other.empty:
-        fig_other = px.line()
-        for parameter in selected_parameters_other:
-            for device in selected_devices_other:
-                device_data = filtered_data_other[filtered_data_other['device'] == device]
-                fig_other.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
-        fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
-        st.plotly_chart(fig_other, use_container_width=True)
-        
-        st.subheader('Raw Data (Other Dates)')
-        st.data
+    selected_parameters_other = st.multiselect('Select Parameters (Other Dates)', all_columns_other, default=all_columns
