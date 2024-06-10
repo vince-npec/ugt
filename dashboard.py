@@ -176,4 +176,8 @@ if not data_other.empty:
             for device in selected_devices_other:
                 device_data = filtered_data_other[filtered_data_other['device'] == device]
                 fig_other.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
-        fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='
+        fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
+        st.plotly_chart(fig_other, use_container_width=True)
+        
+        st.subheader('Raw Data (Other Dates)')
+        st.data
