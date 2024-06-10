@@ -52,6 +52,10 @@ st.set_page_config(layout="wide")
 # Specific dates to filter
 specific_dates = ['20240605', '20240606']
 
+# Initialize data frames
+data_specified = pd.DataFrame()
+data_other = pd.DataFrame()
+
 # Option to fetch files from OneDrive folder
 st.title('Fetch Files from OneDrive Folder')
 folder_link = st.text_input('Enter OneDrive folder link:', 'https://1drv.ms/f/s!Anuwhpfjswn1akYZhJrSGmcvz4g?e=TT0WrP')
