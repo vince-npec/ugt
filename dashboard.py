@@ -10,9 +10,7 @@ st.set_page_config(layout="wide")
 
 # Function to convert OneDrive share link to direct download link
 def onedrive_direct_download_link(share_link):
-    base_url = "https://onedrive.live.com/download?resid="
-    file_id = share_link.split('/')[-1].split('?')[0]
-    return base_url + file_id
+    return share_link.replace("1drv.ms", "1drv.ms/u/s!Anuwhpfjswn1akYZhJrSGmcvz4g?e=IbGrDq&download=1")
 
 # Function to download files from OneDrive public link
 def download_file_from_onedrive(onedrive_link):
@@ -83,20 +81,23 @@ elif uploaded_zip:
 st.title('Fetch Files from OneDrive')
 onedrive_link = st.text_input('Enter OneDrive public link:', 'https://1drv.ms/f/s!Anuwhpfjswn1akYZhJrSGmcvz4g?e=IbGrDq')
 if st.button('Fetch Files from OneDrive'):
-    file_content = download_file_from_onedrive(onedrive_link)
-    with zipfile.ZipFile(file_content) as z:
-        for filename in z.namelist():
-            if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
-                with z.open(filename) as f:
-                    try:
-                        df = pd.read_csv(f, delimiter=';')
-                        df['device'] = filename.split('/')[0].split('_')[0]
-                        if any(filename.endswith(date + '.csv') for date in specific_dates):
-                            data_specified = pd.concat([data_specified, df], ignore_index=True)
-                        else:
-                            data_other = pd.concat([data_other, df], ignore_index=True)
-                    except Exception as e:
-                        st.error(f"Error reading {filename}: {e}")
+    try:
+        file_content = download_file_from_onedrive(onedrive_link)
+        with zipfile.ZipFile(file_content) as z:
+            for filename in z.namelist():
+                if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
+                    with z.open(filename) as f:
+                        try:
+                            df = pd.read_csv(f, delimiter=';')
+                            df['device'] = filename.split('/')[0].split('_')[0]
+                            if any(filename.endswith(date + '.csv') for date in specific_dates):
+                                data_specified = pd.concat([data_specified, df], ignore_index=True)
+                            else:
+                                data_other = pd.concat([data_other, df], ignore_index=True)
+                        except Exception as e:
+                            st.error(f"Error reading {filename}: {e}")
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Error downloading file from OneDrive: {e}")
 
 # Convert timestamp to datetime
 for data in [data_specified, data_other]:
@@ -163,14 +164,4 @@ if not data_other.empty:
         fig_other = px.line()
         for parameter in selected_parameters_other:
             for device in selected_devices_other:
-                device_data = filtered_data_other[filtered_data_other['device'] == device]
-                fig_other.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
-        fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
-        st.plotly_chart(fig_other, use_container_width=True)
-        
-        st.subheader('Raw Data (Other Dates)')
-        st.dataframe(filtered_data_other)
-    else:
-        st.write("No data available for the selected parameters and date range (Other Dates).")
-else:
-    st.write("No data available for the other dates.")
+                device_data = filtered_data
