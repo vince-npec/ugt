@@ -168,4 +168,9 @@ if not data_other.empty:
         fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
         st.plotly_chart(fig_other, use_container_width=True)
         
-        st.subheader('Raw Data (
+        st.subheader('Raw Data (Other Dates)')
+        st.dataframe(filtered_data_other)
+    else:
+        st.write("No data available for the selected parameters and date range (Other Dates).")
+else:
+    st.write("No data available for the other dates.")
