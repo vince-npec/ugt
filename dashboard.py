@@ -10,7 +10,10 @@ st.set_page_config(layout="wide")
 
 # Function to convert OneDrive share link to direct download link
 def onedrive_direct_download_link(share_link):
-    return share_link.replace("1drv.ms", "1drv.ms/u/s!Anuwhpfjswn1akYZhJrSGmcvz4g?e=IbGrDq&download=1")
+    # This link transformation might need adjustments based on the exact sharing method
+    base_url = "https://onedrive.live.com/download?resid="
+    file_id = share_link.split('/')[-1].split('?')[0]
+    return base_url + file_id
 
 # Function to download files from OneDrive public link
 def download_file_from_onedrive(onedrive_link):
@@ -164,4 +167,7 @@ if not data_other.empty:
         fig_other = px.line()
         for parameter in selected_parameters_other:
             for device in selected_devices_other:
-                device_data = filtered_data
+                device_data = filtered_data_other[filtered_data_other['device'] == device]
+                fig_other.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
+        fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
+        st.plotly_chart(fig_other, use
