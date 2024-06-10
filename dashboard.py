@@ -1,70 +1,48 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import requests
-import io
-from bs4 import BeautifulSoup
-
-# Function to extract file links from OneDrive folder
-def fetch_file_links_from_onedrive(folder_link):
-    response = requests.get(folder_link)
-    response.raise_for_status()
-    
-    soup = BeautifulSoup(response.content, 'html.parser')
-    file_links = []
-    for a_tag in soup.find_all('a'):
-        href = a_tag.get('href')
-        if href and 'download' in href:
-            file_links.append(href)
-    
-    return file_links
-
-# Function to download a file from a given URL
-def download_file(file_url):
-    response = requests.get(file_url)
-    response.raise_for_status()
-    return io.BytesIO(response.content)
-
-# Function to load multiple CSV files into a single DataFrame
-def load_data(file_urls, specific_dates):
-    data_frames_specified = []
-    data_frames_other = []
-    
-    for file_url in file_urls:
-        file_content = download_file(file_url)
-        try:
-            df = pd.read_csv(file_content, delimiter=';')
-            df['device'] = file_url.split('/')[-1].split('_')[0]
-            if any(file_url.endswith(date + '.csv') for date in specific_dates):
-                data_frames_specified.append(df)
-            else:
-                data_frames_other.append(df)
-        except Exception as e:
-            st.error(f"Error reading {file_url}: {e}")
-    
-    specified_combined_df = pd.concat(data_frames_specified, ignore_index=True) if data_frames_specified else pd.DataFrame()
-    other_combined_df = pd.concat(data_frames_other, ignore_index=True) if data_frames_other else pd.DataFrame()
-    return specified_combined_df, other_combined_df
+import zipfile
 
 # Set page configuration
 st.set_page_config(layout="wide")
 
-# Specific dates to filter
-specific_dates = ['20240605', '20240606']
+# Function to load multiple CSV files from a ZIP into separate DataFrames based on the specified dates
+def load_data_from_zip(zip_file, specific_dates):
+    specified_data_frames = []
+    other_data_frames = []
+    
+    with zipfile.ZipFile(zip_file) as z:
+        for filename in z.namelist():
+            if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
+                with z.open(filename) as f:
+                    try:
+                        df = pd.read_csv(f, delimiter=';')
+                        # Infer device name from the filename
+                        df['device'] = filename.split('/')[0].split('_')[0]  # Modify this line as needed
+                        if any(filename.endswith(date + '.csv') for date in specific_dates):
+                            specified_data_frames.append(df)
+                        else:
+                            other_data_frames.append(df)
+                    except Exception as e:
+                        st.error(f"Error reading {filename}: {e}")
+    
+    specified_combined_df = pd.concat(specified_data_frames, ignore_index=True) if specified_data_frames else pd.DataFrame()
+    other_combined_df = pd.concat(other_data_frames, ignore_index=True) if other_data_frames else pd.DataFrame()
+    return specified_combined_df, other_combined_df
 
-# Initialize data frames
+# Upload ZIP file
+st.title('Upload a ZIP file containing CSV files')
+uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
+
 data_specified = pd.DataFrame()
 data_other = pd.DataFrame()
 
-# Option to fetch files from OneDrive folder
-st.title('Fetch Files from OneDrive Folder')
-folder_link = st.text_input('Enter OneDrive folder link:', 'https://1drv.ms/f/s!Anuwhpfjswn1akYZhJrSGmcvz4g?e=TT0WrP')
-if st.button('Fetch Files from OneDrive Folder'):
-    try:
-        file_urls = fetch_file_links_from_onedrive(folder_link)
-        data_specified, data_other = load_data(file_urls, specific_dates)
-    except Exception as e:
-        st.error(f"Error fetching files: {e}")
+# Specific dates to filter
+specific_dates = ['20240605', '20240606']
+
+# Load data from uploaded ZIP file
+if uploaded_zip:
+    data_specified, data_other = load_data_from_zip(uploaded_zip, specific_dates)
 
 # Convert timestamp to datetime
 for data in [data_specified, data_other]:
@@ -110,6 +88,7 @@ if not data_specified.empty:
         fig_specified.update_layout(title='Time Series Comparison (Specified Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
         st.plotly_chart(fig_specified, use_container_width=True)
         
+        # Display the filtered data as a table below the plot
         st.subheader('Raw Data (Specified Dates)')
         st.dataframe(filtered_data_specified)
     else:
@@ -136,6 +115,7 @@ if not data_other.empty:
         fig_other.update_layout(title='Time Series Comparison (Other Dates)', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
         st.plotly_chart(fig_other, use_container_width=True)
         
+        # Display the filtered data as a table below the plot
         st.subheader('Raw Data (Other Dates)')
         st.dataframe(filtered_data_other)
     else:
