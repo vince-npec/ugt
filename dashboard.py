@@ -96,15 +96,15 @@ start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min
 filtered_data = data[(data['device'].isin(selected_devices)) & (data['timestamp'] >= pd.to_datetime(start_date)) & (data['timestamp'] <= pd.to_datetime(end_date))]
 
 if selected_parameters and not filtered_data.empty:
-    fig = px.line()
     for parameter in selected_parameters:
+        fig = px.line()
         for device in selected_devices:
             device_data = filtered_data[filtered_data['device'] == device]
             fig.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines', name=f'{device} - {parameter}', connectgaps=False)
-    fig.update_layout(title='Time Series Comparison', xaxis_title='Timestamp', yaxis_title='Values', width=1200, height=600)
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(title=f'Time Series Comparison for {parameter}', xaxis_title='Timestamp', yaxis_title=parameter, width=1200, height=600)
+        st.plotly_chart(fig, use_container_width=True)
     
-    # Display the filtered data as a table below the plot
+    # Display the filtered data as a table below the plots
     st.subheader('Raw Data')
     st.dataframe(filtered_data)
 else:
