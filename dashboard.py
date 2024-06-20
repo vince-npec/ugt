@@ -73,10 +73,22 @@ except Exception as e:
 # Handle missing values
 data = data.interpolate().ffill().bfill()
 
+# Reorder columns to have 'device' as the first column
+columns = ['device'] + [col for col in data.columns if col != 'device']
+data = data[columns]
+
 # Get all column names for selection
 all_columns = data.columns.tolist()
 if 'timestamp' in all_columns: all_columns.remove('timestamp')
 if 'device' in all_columns: all_columns.remove('device')
+
+# Define 'Vera' parameters
+vera_parameters = [
+    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)', 
+    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)', 
+    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)', 
+    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
+]
 
 # Get unique devices
 devices = data['device'].unique()
@@ -89,7 +101,12 @@ selected_devices = st.multiselect('Select Devices', device_options, default='All
 if 'All' in selected_devices:
     selected_devices = devices.tolist()
 
-selected_parameters = st.multiselect('Select Parameters', all_columns, default=all_columns[:1])
+parameter_options = ['Vera'] + all_columns
+selected_parameters = st.multiselect('Select Parameters', parameter_options, default=parameter_options[:1])
+
+# Automatically select 'Vera' parameters if 'Vera' is chosen
+if 'Vera' in selected_parameters:
+    selected_parameters = [param for param in selected_parameters if param != 'Vera'] + [param for param in vera_parameters if param in all_columns]
 
 start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
 
