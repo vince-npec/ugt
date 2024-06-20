@@ -84,7 +84,7 @@ devices = data['device'].unique()
 # Streamlit layout
 st.title('Sensor Data Dashboard')
 
-selected_devices = st.multiselect('Select Devices', devices, default=devices[0])
+selected_devices = st.multiselect('Select Devices', devices, default=devices.tolist())
 selected_parameters = st.multiselect('Select Parameters', all_columns, default=all_columns[:1])
 
 start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
