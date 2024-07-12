@@ -6,38 +6,28 @@ import zipfile
 # Set page configuration
 st.set_page_config(layout="wide")
 
-# Define the mapping from file numbers to Ecotron names
-ecotron_names = {
-    0: "Ulysses",
-    1: "Admiral",
-    2: "Scarab",
-    3: "Ladybug",
-    4: "Yellowjacket",
-    5: "Flea",
-    6: "Mosquito",
-    7: "Stag beetle",
-    8: "Cockroach",
-    9: "Termite",
-    10: "Centipede",
-    11: "Fly",
-    12: "Giraffe",
-    13: "Tarantula",
-    14: "Fire bug",
-    15: "Tick",
-    16: "Moth",
-    17: "Millipede",
-    18: "Mantis",
-    19: "Dragonfly"
-}
-
-# List of devices without plants
-#devices_without_plants = ["Cockroach", "Giraffe", "Fire bug", "Fly"]
-
-# Define the room assignment
+# Define the mapping from device names to room assignments
 room_assignments = {
-    0: "Room 1", 1: "Room 1", 2: "Room 1", 3: "Room 1", 4: "Room 1", 5: "Room 1", 6: "Room 1", 7: "Room 1",
-    8: "Room 2", 9: "Room 2", 10: "Room 2", 11: "Room 2", 12: "Room 2", 13: "Room 2", 14: "Room 2", 15: "Room 2",
-    16: "Room 2", 17: "Room 2", 18: "Room 2", 19: "Room 2"
+    "Ulysses": "Room 1",
+    "Admiral": "Room 1",
+    "Scarab": "Room 1",
+    "Ladybug": "Room 1",
+    "Yellowjacket": "Room 1",
+    "Flea": "Room 1",
+    "Mosquito": "Room 1",
+    "Stag beetle": "Room 1",
+    "Cockroach": "Room 2",
+    "Termite": "Room 2",
+    "Centipede": "Room 2",
+    "Fly": "Room 2",
+    "Giraffe": "Room 2",
+    "Tarantula": "Room 2",
+    "Fire bug": "Room 2",
+    "Tick": "Room 2",
+    "Moth": "Room 2",
+    "Millipede": "Room 2",
+    "Mantis": "Room 2",
+    "Dragonfly": "Room 2"
 }
 
 # Function to load multiple CSV files into a single DataFrame
@@ -46,10 +36,10 @@ def load_data(uploaded_files):
     for uploaded_file in uploaded_files:
         try:
             df = pd.read_csv(uploaded_file, delimiter=';')
-            # Infer device number from the filename
-            device_number = int(uploaded_file.name.split('_')[0])  # Modify this line as needed
-            df['device'] = ecotron_names.get(device_number, "Unknown")
-            df['room'] = room_assignments.get(device_number, "Unknown")
+            # Infer device name from the filename
+            device_name = uploaded_file.name.split('_')[0]
+            df['device'] = device_name
+            df['room'] = room_assignments.get(device_name, "Unknown")
             data_frames.append(df)
         except Exception as e:
             st.error(f"Error reading {uploaded_file.name}: {e}")
@@ -70,10 +60,10 @@ def load_data_from_zip(zip_file):
                 with z.open(filename) as f:
                     try:
                         df = pd.read_csv(f, delimiter=';')
-                        # Infer device number from the filename
-                        device_number = int(filename.split('/')[0].split('_')[0])  # Modify this line as needed
-                        df['device'] = ecotron_names.get(device_number, "Unknown")
-                        df['room'] = room_assignments.get(device_number, "Unknown")
+                        # Infer device name from the filename
+                        device_name = filename.split('/')[0].split('_')[0]
+                        df['device'] = device_name
+                        df['room'] = room_assignments.get(device_name, "Unknown")
                         data_frames.append(df)
                     except Exception as e:
                         st.error(f"Error reading {filename}: {e}")
