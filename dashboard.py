@@ -6,7 +6,15 @@ import zipfile
 # Set page configuration
 st.set_page_config(layout="wide")
 
+# Define room assignments
+room_assignments = {
+    0: "Room 1", 1: "Room 1", 2: "Room 1", 3: "Room 1", 4: "Room 1", 5: "Room 1", 6: "Room 1", 7: "Room 1",
+    8: "Room 2", 9: "Room 2", 10: "Room 2", 11: "Room 2", 12: "Room 2", 13: "Room 2", 14: "Room 2", 15: "Room 2",
+    16: "Room 2", 17: "Room 2", 18: "Room 2", 19: "Room 2"
+}
+
 # Function to load multiple CSV files into a single DataFrame
+@st.cache
 def load_data(uploaded_files):
     data_frames = []
     for uploaded_file in uploaded_files:
@@ -14,6 +22,9 @@ def load_data(uploaded_files):
             df = pd.read_csv(uploaded_file, delimiter=';')
             # Infer device name from the filename
             df['device'] = uploaded_file.name.split('_')[0]  # Modify this line as needed
+            # Map device to room
+            device_id = int(df['device'][0])  # Assuming device IDs are integers at the start of the name
+            df['room'] = room_assignments.get(device_id, "Unknown")
             data_frames.append(df)
         except Exception as e:
             st.error(f"Error reading {uploaded_file.name}: {e}")
@@ -26,6 +37,7 @@ def load_data(uploaded_files):
     return combined_df
 
 # Function to load multiple CSV files from a ZIP into a single DataFrame
+@st.cache
 def load_data_from_zip(zip_file):
     data_frames = []
     with zipfile.ZipFile(zip_file) as z:
@@ -36,6 +48,9 @@ def load_data_from_zip(zip_file):
                         df = pd.read_csv(f, delimiter=';')
                         # Infer device name from the filename
                         df['device'] = filename.split('/')[0].split('_')[0]  # Modify this line as needed
+                        # Map device to room
+                        device_id = int(df['device'][0])  # Assuming device IDs are integers at the start of the name
+                        df['room'] = room_assignments.get(device_id, "Unknown")
                         data_frames.append(df)
                     except Exception as e:
                         st.error(f"Error reading {filename}: {e}")
@@ -74,43 +89,61 @@ except Exception as e:
 data = data.interpolate().ffill().bfill()
 
 # Reorder columns to have 'device' as the first column
-columns = ['device'] + [col for col in data.columns if col != 'device']
+columns = ['device', 'room'] + [col for col in data.columns if col not in ['device', 'room']]
 data = data[columns]
 
 # Get all column names for selection
 all_columns = data.columns.tolist()
 if 'timestamp' in all_columns: all_columns.remove('timestamp')
 if 'device' in all_columns: all_columns.remove('device')
+if 'room' in all_columns: all_columns.remove('room')
 
-# Define 'Vera' parameters
-vera_parameters = [
+# Define 'Mariana' parameters
+Mariana_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)', 
     'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)', 
     'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)', 
     'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
 ]
 
-# Get unique devices
+# Get unique devices and rooms
 devices = data['device'].unique()
 device_options = ['All'] + devices.tolist()
+rooms = data['room'].unique()
+room_options = ['All'] + rooms.tolist()
 
 # Streamlit layout
 st.title('Sensor Data Dashboard')
 
+# Room selection
+selected_rooms = st.multiselect('Select Rooms', room_options, default='All')
+if 'All' in selected_rooms:
+    selected_rooms = rooms.tolist()
+
+# Device selection
 selected_devices = st.multiselect('Select Devices', device_options, default='All')
 if 'All' in selected_devices:
     selected_devices = devices.tolist()
 
-parameter_options = ['Vera'] + all_columns
+parameter_options = ['Mariana'] + all_columns
 selected_parameters = st.multiselect('Select Parameters', parameter_options, default=parameter_options[:1])
 
-# Automatically select 'Vera' parameters if 'Vera' is chosen
-if 'Vera' in selected_parameters:
-    selected_parameters = [param for param in selected_parameters if param != 'Vera'] + [param for param in vera_parameters if param in all_columns]
+# Automatically select 'Mariana' parameters if 'Mariana' is chosen
+if 'Mariana' in selected_parameters:
+    selected_parameters = [param for param in selected_parameters if param != 'Mariana'] + [param for param in Mariana_parameters if param in all_columns]
 
-start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
+# Check if start_date and end_date are valid
+try:
+    start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
+    if start_date > end_date:
+        st.error("Error: End date must be after start date.")
+        st.stop()
+except Exception as e:
+    st.error(f"Error with date input: {e}")
+    st.stop()
 
-filtered_data = data[(data['device'].isin(selected_devices)) & (data['timestamp'] >= pd.to_datetime(start_date)) & (data['timestamp'] <= pd.to_datetime(end_date))]
+# Filter data by selected rooms, devices, and date range
+filtered_data = data[(data['room'].isin(selected_rooms)) & (data['device'].isin(selected_devices)) & (data['timestamp'] >= pd.to_datetime(start_date)) & (data['timestamp'] <= pd.to_datetime(end_date))]
 
 if selected_parameters and not filtered_data.empty:
     for parameter in selected_parameters:
