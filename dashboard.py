@@ -14,7 +14,7 @@ room_assignments = {
 }
 
 # Function to load multiple CSV files into a single DataFrame
-@st.cache
+@st.cache_data
 def load_data(uploaded_files):
     data_frames = []
     for uploaded_file in uploaded_files:
@@ -37,7 +37,7 @@ def load_data(uploaded_files):
     return combined_df
 
 # Function to load multiple CSV files from a ZIP into a single DataFrame
-@st.cache
+@st.cache_data
 def load_data_from_zip(zip_file):
     data_frames = []
     with zipfile.ZipFile(zip_file) as z:
