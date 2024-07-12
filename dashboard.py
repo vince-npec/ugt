@@ -15,14 +15,16 @@ room_assignments = {
     "Yellowjacket": "Room 1",
     "Flea": "Room 1",
     "Mosquito": "Room 1",
-    "Stag_Beetle": "Room 1",
+    "Stag beetle": "Room 1",
+    "Stag_Bettle": "Room 1",  # For filename mapping
     "Cockroach": "Room 2",
     "Termite": "Room 2",
     "Centipede": "Room 2",
     "Fly": "Room 2",
     "Giraffe": "Room 2",
     "Tarantula": "Room 2",
-    "Fire_Bug": "Room 2",
+    "Fire bug": "Room 2",
+    "Fire_Bug": "Room 2",  # For filename mapping
     "Tick": "Room 2",
     "Moth": "Room 2",
     "Millipede": "Room 2",
@@ -38,6 +40,10 @@ def load_data(uploaded_files):
             df = pd.read_csv(uploaded_file, delimiter=';')
             # Infer device name from the filename
             device_name = uploaded_file.name.split('_')[0]
+            if device_name == "Fire":
+                device_name = "Fire bug"
+            elif device_name == "Stag":
+                device_name = "Stag beetle"
             df['device'] = device_name
             df['room'] = room_assignments.get(device_name, "Unknown")
             data_frames.append(df)
@@ -62,6 +68,10 @@ def load_data_from_zip(zip_file):
                         df = pd.read_csv(f, delimiter=';')
                         # Infer device name from the filename
                         device_name = filename.split('/')[0].split('_')[0]
+                        if device_name == "Fire":
+                            device_name = "Fire bug"
+                        elif device_name == "Stag":
+                            device_name = "Stag beetle"
                         df['device'] = device_name
                         df['room'] = room_assignments.get(device_name, "Unknown")
                         data_frames.append(df)
