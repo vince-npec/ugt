@@ -99,7 +99,7 @@ if 'device' in all_columns: all_columns.remove('device')
 if 'room' in all_columns: all_columns.remove('room')
 
 # Define 'Mariana' parameters
-Mariana_parameters = [
+mariana_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)', 
     'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)', 
     'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)', 
@@ -130,7 +130,7 @@ selected_parameters = st.multiselect('Select Parameters', parameter_options, def
 
 # Automatically select 'Mariana' parameters if 'Mariana' is chosen
 if 'Mariana' in selected_parameters:
-    selected_parameters = [param for param in selected_parameters if param != 'Mariana'] + [param for param in Mariana_parameters if param in all_columns]
+    selected_parameters = [param for param in selected_parameters if param != 'Mariana'] + [param for param in mariana_parameters if param in all_columns]
 
 # Check if start_date and end_date are valid
 try:
