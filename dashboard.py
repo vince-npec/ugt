@@ -35,29 +35,7 @@ room_assignments = {
     "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2"
 }
 
-# ──────────────────────────────
-# Limit for rows
-# ──────────────────────────────
 MAX_ROWS = 50000
-
-# ──────────────────────────────
-# List of known/valid parameters
-# ──────────────────────────────
-valid_parameter_names = [
-    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
-    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
-    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
-    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)',
-    'LBC tank weight (Kg)', 'Soil coolant in temperature (°C)', 'Soil coolant out temperature (°C)',
-    # Add more parameter names as needed here
-]
-
-standard_parameters = [
-    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
-    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
-    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
-    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
-]
 
 # ──────────────────────────────
 # Load multiple CSVs
@@ -206,14 +184,39 @@ columns = ['device', 'room'] + [col for col in data.columns if col not in ['devi
 data = data[columns]
 
 # ──────────────────────────────
-# Only show valid parameters (from known parameter list)
+# Dynamic parameter detection (not hardcoded)
 # ──────────────────────────────
-all_columns = [col for col in data.columns if col in valid_parameter_names]
+def looks_like_data_point(col):
+    try:
+        float(str(col))  # is a number (including -1500.00, 793.03.1, etc.)
+        return True
+    except:
+        pass
+    # Timestamp-like (e.g., '31.07.2025 00:10:00')
+    if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)):
+        return True
+    # Optionally: filter very short columns (often spurious), e.g., 1-char or 2-char
+    if len(str(col)) < 3:
+        return True
+    return False
+
+all_columns = [
+    col for col in data.columns
+    if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
+]
 
 devices = data['device'].unique()
 device_options = ['All'] + devices.tolist()
 rooms = data['room'].unique()
 room_options = ['All'] + rooms.tolist()
+
+# Optional: Smart guess at "standard" parameters (not used for filtering)
+standard_parameters = [
+    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
+    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
+    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
+    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
+]
 
 # ──────────────────────────────
 # UI filters
