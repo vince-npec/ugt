@@ -6,33 +6,41 @@ import zipfile
 # Set page configuration
 st.set_page_config(layout="wide")
 
-# Define the mapping from device names to room assignments
+# ──────────────────────────────
+# ⬆️ Header with logos and title
+# ──────────────────────────────
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col1:
+    st.image("https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png", width=100)
+
+with col2:
+    st.markdown(
+        "<h1 style='text-align: center; color: black;'>Visualization Dashboard NPEC Ecotrons</h1>",
+        unsafe_allow_html=True
+    )
+
+with col3:
+    st.image("https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png", width=100)
+
+st.markdown("---")
+
+# ──────────────────────────────
+# Room assignment mapping
+# ──────────────────────────────
 room_assignments = {
-    "Ulysses": "Room 1",
-    "Admiral": "Room 1",
-    "Scarab": "Room 1",
-    "Ladybug": "Room 1",
-    "Yellowjacket": "Room 1",
-    "Flea": "Room 1",
-    "Mosquito": "Room 1",
-    "Stag beetle": "Room 1",
-    "Stag_Bettle": "Room 1",  # For filename mapping
-    "Cockroach": "Room 2",
-    "Termite": "Room 2",
-    "Centipede": "Room 2",
-    "Fly": "Room 2",
-    "Giraffe": "Room 2",
-    "Tarantula": "Room 2",
-    "Fire bug": "Room 2",
-    "Fire_Bug": "Room 2",  # For filename mapping
-    "Tick": "Room 2",
-    "Moth": "Room 2",
-    "Millipede": "Room 2",
-    "Mantis": "Room 2",
-    "Dragonfly": "Room 2"
+    "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
+    "Ladybug": "Room 1", "Yellowjacket": "Room 1", "Flea": "Room 1",
+    "Mosquito": "Room 1", "Stag beetle": "Room 1", "Stag_Bettle": "Room 1",
+    "Cockroach": "Room 2", "Termite": "Room 2", "Centipede": "Room 2",
+    "Fly": "Room 2", "Giraffe": "Room 2", "Tarantula": "Room 2",
+    "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
+    "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2"
 }
 
-# Function to load multiple CSV files into a single DataFrame
+# ──────────────────────────────
+# Load multiple CSVs
+# ──────────────────────────────
 def load_data(uploaded_files):
     data_frames = []
     for uploaded_file in uploaded_files:
@@ -55,7 +63,9 @@ def load_data(uploaded_files):
 
     return pd.concat(data_frames, ignore_index=True)
 
-# Function to load multiple CSV files from a ZIP into a single DataFrame
+# ──────────────────────────────
+# Load from ZIP
+# ──────────────────────────────
 def load_data_from_zip(zip_file):
     data_frames = []
     with zipfile.ZipFile(zip_file) as z:
@@ -81,14 +91,16 @@ def load_data_from_zip(zip_file):
 
     return pd.concat(data_frames, ignore_index=True)
 
-# Upload CSV or ZIP files
+# ──────────────────────────────
+# Upload widgets
+# ──────────────────────────────
 st.title('Upload CSV or ZIP files')
 uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
 uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
 
 data = pd.DataFrame()
 
-# Load data from uploaded files
+# Load data
 if uploaded_files:
     data = load_data(uploaded_files)
 elif uploaded_zip:
@@ -97,28 +109,33 @@ elif uploaded_zip:
 if data.empty:
     st.stop()
 
-# Convert timestamp to datetime
+# ──────────────────────────────
+# Timestamp handling
+# ──────────────────────────────
 try:
     data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
 except Exception as e:
     st.error(f"Error converting timestamp: {e}")
     st.stop()
 
-# Handle missing values (numeric columns only)
+# ──────────────────────────────
+# Interpolate numeric columns only
+# ──────────────────────────────
 numeric_cols = data.select_dtypes(include='number').columns
 data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
-# Reorder columns to have 'device' as the first column
+# Reorder columns
 columns = ['device', 'room'] + [col for col in data.columns if col not in ['device', 'room']]
 data = data[columns]
 
-# Get all column names for selection
+# ──────────────────────────────
+# Parameter + filter setup
+# ──────────────────────────────
 all_columns = data.columns.tolist()
 for col in ['timestamp', 'device', 'room']:
     if col in all_columns:
         all_columns.remove(col)
 
-# Define Standard Parameters
 standard_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
     'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
@@ -126,21 +143,20 @@ standard_parameters = [
     'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
 ]
 
-# Get unique devices and rooms
 devices = data['device'].unique()
 device_options = ['All'] + devices.tolist()
 rooms = data['room'].unique()
 room_options = ['All'] + rooms.tolist()
 
-# Streamlit layout
+# ──────────────────────────────
+# UI filters
+# ──────────────────────────────
 st.title('Sensor Data Dashboard')
 
-# Room selection
 selected_rooms = st.multiselect('Select Rooms', room_options, default='All')
 if 'All' in selected_rooms:
     selected_rooms = rooms.tolist()
 
-# Device selection
 selected_devices = st.multiselect('Select Devices', device_options, default='All')
 if 'All' in selected_devices:
     selected_devices = devices.tolist()
@@ -152,7 +168,6 @@ if 'Standard Parameters' in selected_parameters:
     selected_parameters = [param for param in selected_parameters if param != 'Standard Parameters'] + [
         param for param in standard_parameters if param in all_columns]
 
-# Date selection
 try:
     start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
     if start_date > end_date:
@@ -162,7 +177,9 @@ except Exception as e:
     st.error(f"Error with date input: {e}")
     st.stop()
 
-# Filter by room, device, and date
+# ──────────────────────────────
+# Data filtering
+# ──────────────────────────────
 filtered_data = data[
     (data['room'].isin(selected_rooms)) &
     (data['device'].isin(selected_devices)) &
@@ -170,7 +187,9 @@ filtered_data = data[
     (data['timestamp'] <= pd.to_datetime(end_date))
 ]
 
+# ──────────────────────────────
 # Plotting
+# ──────────────────────────────
 if selected_parameters and not filtered_data.empty:
     for parameter in selected_parameters:
         fig = px.line()
@@ -192,8 +211,19 @@ if selected_parameters and not filtered_data.empty:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # Raw data table
     st.subheader('Raw Data')
     st.dataframe(filtered_data)
 else:
     st.write("No data available for the selected parameters and date range.")
+
+# ──────────────────────────────
+# Footer
+# ──────────────────────────────
+st.markdown("<hr style='margin-top:50px; margin-bottom:10px;'>", unsafe_allow_html=True)
+st.markdown(
+    "<p style='text-align: center; color: grey; font-size: 14px;'>"
+    "© 2025 NPEC Ecotron Module - Visualization Dashboard by Dr. Vinicius Lube | "
+    "Phenomics Engineer Innovation Lead"
+    "</p>",
+    unsafe_allow_html=True
+)
