@@ -7,21 +7,17 @@ import zipfile
 st.set_page_config(layout="wide")
 
 # ──────────────────────────────
-# ⬆️ Header with logos and title
+# ⬆️ Custom header with logos + title
 # ──────────────────────────────
-col1, col2, col3 = st.columns([1, 2, 1])
-
-with col1:
-    st.image("https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png", width=100)
-
-with col2:
-    st.markdown(
-        "<h1 style='text-align: center; color: black;'>Visualization Dashboard NPEC Ecotrons</h1>",
-        unsafe_allow_html=True
-    )
-
-with col3:
-    st.image("https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png", width=100)
+st.markdown("""
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="80"/>
+        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0;">
+            Visualization Dashboard NPEC Ecotrons
+        </h1>
+        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" width="80"/>
+    </div>
+""", unsafe_allow_html=True)
 
 st.markdown("---")
 
