@@ -7,7 +7,7 @@ import zipfile
 st.set_page_config(layout="wide")
 
 # ──────────────────────────────
-# ⬆️ Custom header with logos + title
+# Header with logos and white title
 # ──────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
@@ -158,7 +158,7 @@ if 'All' in selected_devices:
     selected_devices = devices.tolist()
 
 parameter_options = ['Standard Parameters'] + all_columns
-selected_parameters = st.multiselect('Select Parameters', parameter_options, default=parameter_options[:1])
+selected_parameters = st.multiselect('Select Parameters', parameter_options)
 
 if 'Standard Parameters' in selected_parameters:
     selected_parameters = [param for param in selected_parameters if param != 'Standard Parameters'] + [
