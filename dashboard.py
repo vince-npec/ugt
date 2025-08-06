@@ -8,13 +8,13 @@ import re
 st.set_page_config(layout="wide")
 
 # ──────────────────────────────
-# Header with logos and white title
+# Header with logos and custom title
 # ──────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="104"/>
-        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0;">
-            Visualization Dashboard NPEC Ecotrons
+        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
+            Visualization Dashboard | <b style="font-weight:700;">NPEC Ecotrons</b>
         </h1>
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" width="80"/>
     </div>
@@ -39,6 +39,25 @@ room_assignments = {
 # Limit for rows
 # ──────────────────────────────
 MAX_ROWS = 50000
+
+# ──────────────────────────────
+# List of known/valid parameters
+# ──────────────────────────────
+valid_parameter_names = [
+    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
+    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
+    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
+    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)',
+    'LBC tank weight (Kg)', 'Soil coolant in temperature (°C)', 'Soil coolant out temperature (°C)',
+    # Add more parameter names as needed here
+]
+
+standard_parameters = [
+    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
+    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
+    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
+    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
+]
 
 # ──────────────────────────────
 # Load multiple CSVs
@@ -142,6 +161,41 @@ except Exception as e:
     st.stop()
 
 # ──────────────────────────────
+# User can choose sampling frequency
+# ──────────────────────────────
+sampling_options = {
+    "Raw (10 min)": "10T",
+    "30 min": "30T",
+    "Hourly": "1H",
+    "Daily": "1D"
+}
+selected_freq_label = st.selectbox("Select Data Frequency (downsampling)", list(sampling_options.keys()), index=0)
+selected_freq = sampling_options[selected_freq_label]
+
+def resample_data(df, freq):
+    if freq == "10T":
+        return df
+
+    numeric_cols = df.select_dtypes(include='number').columns
+    if 'timestamp' not in df.columns:
+        return df
+
+    resampled_frames = []
+    for (device, room), group in df.groupby(['device', 'room']):
+        group = group.set_index('timestamp').sort_index()
+        resampled = group[numeric_cols].resample(freq).mean()
+        resampled['device'] = device
+        resampled['room'] = room
+        resampled = resampled.reset_index()
+        resampled_frames.append(resampled)
+    if resampled_frames:
+        return pd.concat(resampled_frames, ignore_index=True)
+    else:
+        return df
+
+data = resample_data(data, selected_freq)
+
+# ──────────────────────────────
 # Interpolate numeric columns only
 # ──────────────────────────────
 numeric_cols = data.select_dtypes(include='number').columns
@@ -152,29 +206,9 @@ columns = ['device', 'room'] + [col for col in data.columns if col not in ['devi
 data = data[columns]
 
 # ──────────────────────────────
-# Only show valid parameters (filter out datapoints accidentally as columns)
+# Only show valid parameters (from known parameter list)
 # ──────────────────────────────
-def looks_like_data_point(col):
-    try:
-        float(col)  # numeric value
-        return True
-    except:
-        pass
-    if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)):
-        return True
-    return False
-
-all_columns = [
-    col for col in data.columns
-    if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
-]
-
-standard_parameters = [
-    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
-    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
-    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
-    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
-]
+all_columns = [col for col in data.columns if col in valid_parameter_names]
 
 devices = data['device'].unique()
 device_options = ['All'] + devices.tolist()
