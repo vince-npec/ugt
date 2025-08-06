@@ -205,18 +205,22 @@ all_columns = [
     if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
 ]
 
-devices = data['device'].unique()
-device_options = ['All'] + devices.tolist()
-rooms = data['room'].unique()
-room_options = ['All'] + rooms.tolist()
-
-# Optional: Smart guess at "standard" parameters (not used for filtering)
+# "Standard Parameters" and "DCC project"
 standard_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
     'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
     'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
     'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
 ]
+dcc_parameters = [
+    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)',
+    'Current Days Irrigation (L)', 'Lysimeter weight (Kg)', 'LBC tank weight (Kg)'
+]
+
+devices = data['device'].unique()
+device_options = ['All'] + devices.tolist()
+rooms = data['room'].unique()
+room_options = ['All'] + rooms.tolist()
 
 # ──────────────────────────────
 # UI filters
@@ -231,12 +235,19 @@ selected_devices = st.multiselect('Select Devices', device_options, default='All
 if 'All' in selected_devices:
     selected_devices = devices.tolist()
 
-parameter_options = ['Standard Parameters'] + all_columns if all_columns else ['Standard Parameters']
+parameter_options = ['Standard Parameters', 'DCC project'] + all_columns if all_columns else ['Standard Parameters', 'DCC project']
 selected_parameters = st.multiselect('Select Parameters', parameter_options)
 
+# Expand virtual parameter selections into their component variables
+final_parameters = []
 if 'Standard Parameters' in selected_parameters:
-    selected_parameters = [param for param in selected_parameters if param != 'Standard Parameters'] + [
-        param for param in standard_parameters if param in all_columns]
+    final_parameters += [param for param in standard_parameters if param in all_columns]
+if 'DCC project' in selected_parameters:
+    final_parameters += [param for param in dcc_parameters if param in all_columns]
+final_parameters += [param for param in selected_parameters if param not in ['Standard Parameters', 'DCC project']]
+# Remove duplicates while preserving order
+seen = set()
+final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
 try:
     start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
@@ -260,8 +271,8 @@ filtered_data = data[
 # ──────────────────────────────
 # Plotting
 # ──────────────────────────────
-if selected_parameters and not filtered_data.empty:
-    for parameter in selected_parameters:
+if final_parameters and not filtered_data.empty:
+    for parameter in final_parameters:
         fig = px.line()
         for device in selected_devices:
             device_data = filtered_data[filtered_data['device'] == device]
