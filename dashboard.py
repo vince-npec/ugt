@@ -38,7 +38,6 @@ def load_data(uploaded_files):
     for uploaded_file in uploaded_files:
         try:
             df = pd.read_csv(uploaded_file, delimiter=';')
-            # Infer device name from the filename
             device_name = uploaded_file.name.split('_')[0]
             if device_name == "Fire":
                 device_name = "Fire bug"
@@ -54,8 +53,7 @@ def load_data(uploaded_files):
         st.error("No data frames were created from the uploaded files.")
         return pd.DataFrame()
 
-    combined_df = pd.concat(data_frames, ignore_index=True)
-    return combined_df
+    return pd.concat(data_frames, ignore_index=True)
 
 # Function to load multiple CSV files from a ZIP into a single DataFrame
 def load_data_from_zip(zip_file):
@@ -66,7 +64,6 @@ def load_data_from_zip(zip_file):
                 with z.open(filename) as f:
                     try:
                         df = pd.read_csv(f, delimiter=';')
-                        # Infer device name from the filename
                         device_name = filename.split('/')[0].split('_')[0]
                         if device_name == "Fire":
                             device_name = "Fire bug"
@@ -82,8 +79,7 @@ def load_data_from_zip(zip_file):
         st.error("No data frames were created from the ZIP file.")
         return pd.DataFrame()
 
-    combined_df = pd.concat(data_frames, ignore_index=True)
-    return combined_df
+    return pd.concat(data_frames, ignore_index=True)
 
 # Upload CSV or ZIP files
 st.title('Upload CSV or ZIP files')
@@ -108,8 +104,9 @@ except Exception as e:
     st.error(f"Error converting timestamp: {e}")
     st.stop()
 
-# Handle missing values
-data = data.interpolate().ffill().bfill()
+# Handle missing values (numeric columns only)
+numeric_cols = data.select_dtypes(include='number').columns
+data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
 # Reorder columns to have 'device' as the first column
 columns = ['device', 'room'] + [col for col in data.columns if col not in ['device', 'room']]
@@ -117,9 +114,9 @@ data = data[columns]
 
 # Get all column names for selection
 all_columns = data.columns.tolist()
-if 'timestamp' in all_columns: all_columns.remove('timestamp')
-if 'device' in all_columns: all_columns.remove('device')
-if 'room' in all_columns: all_columns.remove('room')
+for col in ['timestamp', 'device', 'room']:
+    if col in all_columns:
+        all_columns.remove(col)
 
 # Define Standard Parameters
 standard_parameters = [
@@ -151,12 +148,11 @@ if 'All' in selected_devices:
 parameter_options = ['Standard Parameters'] + all_columns
 selected_parameters = st.multiselect('Select Parameters', parameter_options, default=parameter_options[:1])
 
-# Automatically select standard parameters if 'Standard Parameters' is chosen
 if 'Standard Parameters' in selected_parameters:
     selected_parameters = [param for param in selected_parameters if param != 'Standard Parameters'] + [
         param for param in standard_parameters if param in all_columns]
 
-# Check if start_date and end_date are valid
+# Date selection
 try:
     start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
     if start_date > end_date:
@@ -166,7 +162,7 @@ except Exception as e:
     st.error(f"Error with date input: {e}")
     st.stop()
 
-# Filter data by selected rooms, devices, and date range
+# Filter by room, device, and date
 filtered_data = data[
     (data['room'].isin(selected_rooms)) &
     (data['device'].isin(selected_devices)) &
@@ -174,13 +170,19 @@ filtered_data = data[
     (data['timestamp'] <= pd.to_datetime(end_date))
 ]
 
+# Plotting
 if selected_parameters and not filtered_data.empty:
     for parameter in selected_parameters:
         fig = px.line()
         for device in selected_devices:
             device_data = filtered_data[filtered_data['device'] == device]
-            fig.add_scatter(x=device_data['timestamp'], y=device_data[parameter], mode='lines',
-                            name=f'{device} - {parameter}', connectgaps=False)
+            fig.add_scatter(
+                x=device_data['timestamp'],
+                y=device_data[parameter],
+                mode='lines',
+                name=f'{device} - {parameter}',
+                connectgaps=False
+            )
         fig.update_layout(
             title=f'Time Series Comparison for {parameter}',
             xaxis_title='Timestamp',
@@ -190,7 +192,7 @@ if selected_parameters and not filtered_data.empty:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # Display the filtered data as a table below the plots
+    # Raw data table
     st.subheader('Raw Data')
     st.dataframe(filtered_data)
 else:
