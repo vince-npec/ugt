@@ -11,7 +11,7 @@ st.set_page_config(layout="wide")
 # ──────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
-        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="80"/>
+        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="104"/>
         <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0;">
             Visualization Dashboard NPEC Ecotrons
         </h1>
