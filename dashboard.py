@@ -36,10 +36,16 @@ room_assignments = {
 }
 
 # ──────────────────────────────
+# Limit for rows
+# ──────────────────────────────
+MAX_ROWS = 50000
+
+# ──────────────────────────────
 # Load multiple CSVs
 # ──────────────────────────────
-def load_data(uploaded_files):
+def load_data(uploaded_files, max_rows=MAX_ROWS):
     data_frames = []
+    total_rows = 0
     for uploaded_file in uploaded_files:
         try:
             df = pd.read_csv(uploaded_file, delimiter=';')
@@ -50,7 +56,14 @@ def load_data(uploaded_files):
                 device_name = "Stag beetle"
             df['device'] = device_name
             df['room'] = room_assignments.get(device_name, "Unknown")
-            data_frames.append(df)
+            if not df.empty:
+                if total_rows + len(df) > max_rows:
+                    df = df.iloc[:max_rows - total_rows]
+                data_frames.append(df)
+                total_rows += len(df)
+                if total_rows >= max_rows:
+                    st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
+                    break
         except Exception as e:
             st.error(f"Error reading {uploaded_file.name}: {e}")
 
@@ -63,8 +76,9 @@ def load_data(uploaded_files):
 # ──────────────────────────────
 # Load from ZIP
 # ──────────────────────────────
-def load_data_from_zip(zip_file):
+def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
     data_frames = []
+    total_rows = 0
     with zipfile.ZipFile(zip_file) as z:
         for filename in z.namelist():
             if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
@@ -78,7 +92,14 @@ def load_data_from_zip(zip_file):
                             device_name = "Stag beetle"
                         df['device'] = device_name
                         df['room'] = room_assignments.get(device_name, "Unknown")
-                        data_frames.append(df)
+                        if not df.empty:
+                            if total_rows + len(df) > max_rows:
+                                df = df.iloc[:max_rows - total_rows]
+                            data_frames.append(df)
+                            total_rows += len(df)
+                            if total_rows >= max_rows:
+                                st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
+                                break
                     except Exception as e:
                         st.error(f"Error reading {filename}: {e}")
 
@@ -89,11 +110,14 @@ def load_data_from_zip(zip_file):
     return pd.concat(data_frames, ignore_index=True)
 
 # ──────────────────────────────
-# Upload widgets
+# Upload widgets, with file size warning for ZIP
 # ──────────────────────────────
 st.title('Upload CSV or ZIP files')
 uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
 uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
+
+if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
+    st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
 
 data = pd.DataFrame()
 
@@ -102,6 +126,8 @@ if uploaded_files:
     data = load_data(uploaded_files)
 elif uploaded_zip:
     data = load_data_from_zip(uploaded_zip)
+else:
+    st.stop()
 
 if data.empty:
     st.stop()
@@ -129,13 +155,11 @@ data = data[columns]
 # Only show valid parameters (filter out datapoints accidentally as columns)
 # ──────────────────────────────
 def looks_like_data_point(col):
-    # Exclude numeric and timestamp columns that accidentally became headers
     try:
         float(col)  # numeric value
         return True
     except:
         pass
-    # Timestamp/datetime pattern (very broad)
     if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)):
         return True
     return False
@@ -144,10 +168,6 @@ all_columns = [
     col for col in data.columns
     if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
 ]
-
-# Optional: For debugging, uncomment below
-# st.write("All columns detected:", data.columns.tolist())
-# st.write("Filtered parameter columns:", all_columns)
 
 standard_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
@@ -225,7 +245,9 @@ if selected_parameters and not filtered_data.empty:
         st.plotly_chart(fig, use_container_width=True)
 
     st.subheader('Raw Data')
-    st.dataframe(filtered_data)
+    st.dataframe(filtered_data.head(100))
+    if len(filtered_data) > 100:
+        st.info(f"Showing first 100 of {len(filtered_data)} rows out of {len(filtered_data)} total.")
 else:
     st.write("No data available for the selected parameters and date range.")
 
