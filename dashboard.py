@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import zipfile
+import re
 
 # Set page configuration
 st.set_page_config(layout="wide")
@@ -13,7 +14,7 @@ st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="104"/>
         <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0;">
-            Visualization Dashboard | NPEC Ecotrons
+            Visualization Dashboard NPEC Ecotrons
         </h1>
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" width="80"/>
     </div>
@@ -125,12 +126,28 @@ columns = ['device', 'room'] + [col for col in data.columns if col not in ['devi
 data = data[columns]
 
 # ──────────────────────────────
-# Parameter + filter setup
+# Only show valid parameters (filter out datapoints accidentally as columns)
 # ──────────────────────────────
-all_columns = data.columns.tolist()
-for col in ['timestamp', 'device', 'room']:
-    if col in all_columns:
-        all_columns.remove(col)
+def looks_like_data_point(col):
+    # Exclude numeric and timestamp columns that accidentally became headers
+    try:
+        float(col)  # numeric value
+        return True
+    except:
+        pass
+    # Timestamp/datetime pattern (very broad)
+    if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)):
+        return True
+    return False
+
+all_columns = [
+    col for col in data.columns
+    if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
+]
+
+# Optional: For debugging, uncomment below
+# st.write("All columns detected:", data.columns.tolist())
+# st.write("Filtered parameter columns:", all_columns)
 
 standard_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
@@ -157,7 +174,7 @@ selected_devices = st.multiselect('Select Devices', device_options, default='All
 if 'All' in selected_devices:
     selected_devices = devices.tolist()
 
-parameter_options = ['Standard Parameters'] + all_columns
+parameter_options = ['Standard Parameters'] + all_columns if all_columns else ['Standard Parameters']
 selected_parameters = st.multiselect('Select Parameters', parameter_options)
 
 if 'Standard Parameters' in selected_parameters:
