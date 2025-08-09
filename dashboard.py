@@ -4,44 +4,26 @@ import plotly.express as px
 import zipfile
 import re
 
-# ──────────────────────────────
-# PAGE CONFIG
-# ──────────────────────────────
+# Set page configuration
 st.set_page_config(layout="wide")
 
 # ──────────────────────────────
-# HEADER WITH LOGOS AND TITLE
+# Header with logos and custom title
 # ──────────────────────────────
 st.markdown("""
-    <div style="
-        display: flex; 
-        align-items: center; 
-        justify-content: space-between; 
-        margin-bottom: 1rem;
-    ">
-        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" 
-             style="width: 100px; height: auto; object-fit: contain;"/>
-        
-        <h1 style="
-            text-align: center; 
-            color: white; 
-            margin: 0; 
-            font-size: 2.6rem; 
-            font-weight: 400; 
-            flex-grow: 1;
-        ">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="104"/>
+        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
             Visualization Dashboard | <b style="font-weight:700;">NPEC Ecotrons</b>
         </h1>
-        
-        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" 
-             style="width: 60px; height: auto; object-fit: contain;"/>
+        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" width="80"/>
     </div>
 """, unsafe_allow_html=True)
 
 st.markdown("---")
 
 # ──────────────────────────────
-# ROOM ASSIGNMENTS
+# Room assignment mapping
 # ──────────────────────────────
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
@@ -56,7 +38,7 @@ room_assignments = {
 MAX_ROWS = 50000
 
 # ──────────────────────────────
-# LOAD MULTIPLE CSVs
+# Load multiple CSVs
 # ──────────────────────────────
 def load_data(uploaded_files, max_rows=MAX_ROWS):
     data_frames = []
@@ -89,7 +71,7 @@ def load_data(uploaded_files, max_rows=MAX_ROWS):
     return pd.concat(data_frames, ignore_index=True)
 
 # ──────────────────────────────
-# LOAD FROM ZIP
+# Load from ZIP
 # ──────────────────────────────
 def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
     data_frames = []
@@ -125,7 +107,7 @@ def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
     return pd.concat(data_frames, ignore_index=True)
 
 # ──────────────────────────────
-# FILE UPLOAD SECTION
+# Upload widgets, with file size warning for ZIP
 # ──────────────────────────────
 st.title('Upload CSV or ZIP files')
 uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
@@ -136,6 +118,7 @@ if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000
 
 data = pd.DataFrame()
 
+# Load data
 if uploaded_files:
     data = load_data(uploaded_files)
 elif uploaded_zip:
@@ -147,7 +130,7 @@ if data.empty:
     st.stop()
 
 # ──────────────────────────────
-# TIMESTAMP HANDLING
+# Timestamp handling
 # ──────────────────────────────
 try:
     data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
@@ -156,7 +139,7 @@ except Exception as e:
     st.stop()
 
 # ──────────────────────────────
-# SAMPLING OPTIONS
+# User can choose sampling frequency
 # ──────────────────────────────
 sampling_options = {
     "Raw (10 min)": "10T",
@@ -191,26 +174,28 @@ def resample_data(df, freq):
 data = resample_data(data, selected_freq)
 
 # ──────────────────────────────
-# INTERPOLATE NUMERIC COLUMNS
+# Interpolate numeric columns only
 # ──────────────────────────────
 numeric_cols = data.select_dtypes(include='number').columns
 data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
-# REORDER COLUMNS
+# Reorder columns
 columns = ['device', 'room'] + [col for col in data.columns if col not in ['device', 'room']]
 data = data[columns]
 
 # ──────────────────────────────
-# DETECT PARAMETERS
+# Dynamic parameter detection (not hardcoded)
 # ──────────────────────────────
 def looks_like_data_point(col):
     try:
-        float(str(col))
+        float(str(col))  # is a number (including -1500.00, 793.03.1, etc.)
         return True
     except:
         pass
+    # Timestamp-like (e.g., '31.07.2025 00:10:00')
     if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)):
         return True
+    # Optionally: filter very short columns (often spurious), e.g., 1-char or 2-char
     if len(str(col)) < 3:
         return True
     return False
@@ -220,7 +205,7 @@ all_columns = [
     if col not in ['timestamp', 'device', 'room'] and not looks_like_data_point(col)
 ]
 
-# STANDARD & DCC PARAMETERS
+# "Standard Parameters" and "DCC project"
 standard_parameters = [
     'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
     'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
@@ -238,7 +223,7 @@ rooms = data['room'].unique()
 room_options = ['All'] + rooms.tolist()
 
 # ──────────────────────────────
-# FILTERS
+# UI filters
 # ──────────────────────────────
 st.title('Sensor Data Dashboard')
 
@@ -253,12 +238,14 @@ if 'All' in selected_devices:
 parameter_options = ['Standard Parameters', 'DCC project'] + all_columns if all_columns else ['Standard Parameters', 'DCC project']
 selected_parameters = st.multiselect('Select Parameters', parameter_options)
 
+# Expand virtual parameter selections into their component variables
 final_parameters = []
 if 'Standard Parameters' in selected_parameters:
     final_parameters += [param for param in standard_parameters if param in all_columns]
 if 'DCC project' in selected_parameters:
     final_parameters += [param for param in dcc_parameters if param in all_columns]
 final_parameters += [param for param in selected_parameters if param not in ['Standard Parameters', 'DCC project']]
+# Remove duplicates while preserving order
 seen = set()
 final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
@@ -272,7 +259,7 @@ except Exception as e:
     st.stop()
 
 # ──────────────────────────────
-# FILTER DATA
+# Data filtering
 # ──────────────────────────────
 filtered_data = data[
     (data['room'].isin(selected_rooms)) &
@@ -282,7 +269,7 @@ filtered_data = data[
 ]
 
 # ──────────────────────────────
-# PLOTTING
+# Plotting
 # ──────────────────────────────
 if final_parameters and not filtered_data.empty:
     for parameter in final_parameters:
@@ -313,7 +300,7 @@ else:
     st.write("No data available for the selected parameters and date range.")
 
 # ──────────────────────────────
-# FOOTER
+# Footer
 # ──────────────────────────────
 st.markdown("<hr style='margin-top:50px; margin-bottom:10px;'>", unsafe_allow_html=True)
 st.markdown(
