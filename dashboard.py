@@ -4,7 +4,6 @@ import plotly.express as px
 import zipfile
 import re
 from typing import List, Tuple
-import os, glob  # <-- used only for IP cameras loader
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -98,46 +97,59 @@ RHIZOCAMS = [
     # {"host": "Ladybug", "gantry": "http://<ip>:8501/", "analysis": "http://<ip>:8502/"},
 ]
 
-# ── IP Cameras (NEW) — loaded from ipcameras.csv or ipcameras.xlsx (device, label, url)
-def load_ip_cameras():
-    """
-    Looks for a cameras file in the app root:
-      - ipcameras.xlsx  (preferred)  OR any 'ipcameras*.xlsx'
-      - ipcameras.csv   OR any 'ipcameras*.csv'
-    Expected columns (case-insensitive): device, label, url
-    Returns list of dicts: {device, label, url}
-    """
-    candidates = []
-    candidates += glob.glob("ipcameras*.xlsx")
-    candidates += glob.glob("ipcameras*.csv")
-    df = None
-    for path in candidates:
-        try:
-            if path.lower().endswith(".xlsx"):
-                df = pd.read_excel(path)
-            elif path.lower().endswith(".csv"):
-                df = pd.read_csv(path)
-            if df is not None and not df.empty:
-                break
-        except Exception:
-            continue
-    if df is None or df.empty:
-        return []  # no cameras configured yet
-    # normalize columns
-    cols = {c.lower().strip(): c for c in df.columns}
-    need = {"device","label","url"}
-    if not need.issubset(cols.keys()):
-        return []
-    df = df.rename(columns={cols["device"]:"device", cols["label"]:"label", cols["url"]:"url"})
-    # drop rows with missing url/device
-    df = df.dropna(subset=["device","url"])
-    # coerce to string
-    df["device"] = df["device"].astype(str)
-    df["label"] = df["label"].astype(str).fillna("")
-    df["url"] = df["url"].astype(str)
-    return df.to_dict(orient="records")
+# ── IP CAMERAS (NEW, hard-coded)
+# Normalize vendor names to canonical device names used in META/DEVICES
+_CANON = {
+    "Dung-Beetle": "Dung beetle",
+    "Firebug": "Fire bug",
+    "Millipedes": "Millipede",
+    "Potato-Beetle": "Potato beetle",
+    "Scorpio": "Scorpion",
+    "Stag-beetle": "Stag beetle",
+    "YellowJacket": "Yellowjacket",
+}
+def _canon(name: str) -> str:
+    return _CANON.get(name, name)
 
-IP_CAMERAS = load_ip_cameras()
+# Build list as dicts {device, url}
+IP_CAMERAS = [
+    {"device": _canon("Admiral"), "url": "http://192.168.162.45/"},
+    {"device": _canon("Ant"), "url": "http://192.168.162.65/"},
+    {"device": _canon("Bumblebee"), "url": "http://192.168.162.68/"},
+    {"device": _canon("Caterpillar"), "url": "http://192.168.162.77/"},
+    {"device": _canon("Centipede"), "url": "http://192.168.162.62/"},
+    {"device": _canon("Cockroach"), "url": "http://192.168.162.54/"},
+    {"device": _canon("Cricket"), "url": "http://192.168.162.79/"},
+    {"device": _canon("Dragonfly"), "url": "http://192.168.162.52/"},
+    {"device": _canon("Dung-Beetle"), "url": "http://192.168.162.64/"},
+    {"device": _canon("Firebug"), "url": "http://192.168.162.61/"},
+    {"device": _canon("Flea"), "url": "http://192.168.162.50/"},
+    {"device": _canon("Fly"), "url": "http://192.168.162.55/"},
+    {"device": _canon("Giraffe"), "url": "http://192.168.162.161/"},
+    {"device": _canon("Hercules"), "url": "http://192.168.162.71/"},
+    {"device": _canon("Honeybee"), "url": "http://192.168.162.69/"},
+    {"device": _canon("Hornet"), "url": "http://192.168.162.66/"},
+    {"device": _canon("Ladybug"), "url": "http://192.168.162.47/"},
+    {"device": _canon("Longhorn"), "url": "http://192.168.162.74/"},
+    {"device": _canon("Mantis"), "url": "http://192.168.162.56/"},
+    {"device": _canon("Maybug"), "url": "http://192.168.162.67/"},
+    {"device": _canon("Millipedes"), "url": "http://192.168.162.60/"},
+    {"device": _canon("Mosquito"), "url": "http://192.168.162.49/"},
+    {"device": _canon("Moth"), "url": "http://192.168.162.53/"},
+    {"device": _canon("Potato-Beetle"), "url": "http://192.168.162.78/"},
+    {"device": _canon("Scarab"), "url": "http://192.168.162.46/"},
+    {"device": _canon("Scorpio"), "url": "http://192.168.162.76/"},
+    {"device": _canon("Stag-beetle"), "url": "http://192.168.162.48/"},
+    {"device": _canon("Stick"), "url": "http://192.168.162.130/"},
+    {"device": _canon("Stink"), "url": "http://192.168.162.70/"},
+    {"device": _canon("Strider"), "url": "http://192.168.162.72/"},
+    {"device": _canon("Tarantula"), "url": "http://192.168.162.63/"},
+    {"device": _canon("Termite"), "url": "http://192.168.162.58/"},
+    {"device": _canon("Tick"), "url": "http://192.168.162.57/"},
+    {"device": _canon("Ulysses"), "url": "http://192.168.162.44/"},
+    {"device": _canon("Weaver"), "url": "http://192.168.162.75/"},
+    {"device": _canon("YellowJacket"), "url": "http://192.168.162.140/"},
+]
 
 # Sidebar directory (your existing behavior kept)
 st.sidebar.title("Devices")
@@ -187,30 +199,25 @@ for room_name in rooms_order:
             )
 
 # ── IP Cameras (NEW): grouped by room, respects search box
-if IP_CAMERAS:
-    st.sidebar.subheader("IP cameras")
-    for room_name in rooms_order:
-        cams_here = [c for c in IP_CAMERAS if meta_for(c["device"])[0] == room_name]
-        if not cams_here:
-            continue
-        with st.sidebar.expander(room_name, expanded=False):
-            for cam in cams_here:
-                dev = cam["device"]
-                label = cam.get("label","").strip()
-                url = cam["url"]
-                ip = ip_from(url)
-                # search filter
-                if q and (q.lower() not in dev.lower()
-                          and q.lower() not in label.lower()
-                          and q.lower() not in ip.lower()):
-                    continue
-                shown = f"🎥 **{dev}** — {label}" if label else f"🎥 **{dev}**"
-                st.markdown(
-                    f"{shown}  \n"
-                    f"`{ip}`  \n"
-                    f"[Open ↗]({url})",
-                    help=f"{room_name} • IP camera"
-                )
+st.sidebar.subheader("IP cameras")
+for room_name in rooms_order:
+    cams_here = [c for c in IP_CAMERAS if meta_for(c["device"])[0] == room_name]
+    if not cams_here:
+        continue
+    with st.sidebar.expander(room_name, expanded=False):
+        for cam in cams_here:
+            dev = cam["device"]
+            url = cam["url"]
+            ip = ip_from(url)
+            # search filter
+            if q and (q.lower() not in dev.lower() and q.lower() not in ip.lower()):
+                continue
+            st.markdown(
+                f"🎥 **{dev}**  \n"
+                f"`{ip}`  \n"
+                f"[Open ↗]({url})",
+                help=f"{room_name} • IP camera"
+            )
 
 st.sidebar.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
