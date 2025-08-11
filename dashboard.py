@@ -8,15 +8,27 @@ import re
 st.set_page_config(layout="wide")
 
 # ──────────────────────────────
-# Header with logos and custom title
+# Header with logos and custom title (centered) + responsive sizing
 # ──────────────────────────────
 st.markdown("""
+    <style>
+      @media (max-width: 900px) {
+        .npec-title { font-size: 2.1rem !important; }
+        .logo-left { width: 76px !important; }
+        .logo-right { width: 50px !important; }
+      }
+      @media (max-width: 600px) {
+        .npec-title { font-size: 1.8rem !important; }
+        .logo-left { width: 68px !important; }
+        .logo-right { width: 44px !important; }
+      }
+    </style>
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
-        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" width="104"/>
-        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
+        <img class="logo-left" src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png" style="width: 88px; height: auto; object-fit: contain;"/>
+        <h1 class="npec-title" style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
             Visualization Dashboard | <b style="font-weight:700;">NPEC Ecotrons</b>
         </h1>
-        <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" width="80"/>
+        <img class="logo-right" src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png" style="width: 56px; height: auto; object-fit: contain;"/>
     </div>
 """, unsafe_allow_html=True)
 
