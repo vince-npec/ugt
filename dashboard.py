@@ -62,7 +62,7 @@ EMOJI = {
     "Caterpillar":"🐛","Potato beetle":"🥔🪲","Cricket":"🦗",
 }
 
-# Room/type (from your table)
+# Room/type mapping (from your table)
 META = {
     "ulysses":("Ecolab 1","Advanced"), "admiral":("Ecolab 1","Advanced"), "scarab":("Ecolab 1","Advanced"),
     "ladybug":("Ecolab 1","Advanced"), "yellowjacket":("Ecolab 1","Advanced"), "flea":("Ecolab 1","Advanced"),
@@ -87,24 +87,21 @@ def ip_from(url: str) -> str:
     except Exception:
         return url
 
-# ── NEW: RhizoCam units (hosted inside Ecotrons)
-# Add more entries here following the same structure.
+# ── RhizoCam units (add more entries below as needed)
 RHIZOCAMS = [
     {
-        "host": "Cricket",  # Ecotron device that contains this RhizoCam
-        "gantry": "http://192.168.162.186:8501/",    # gantry operation
-        "analysis": "http://192.168.162.186:8502/",  # analysis pipeline
+        "host": "Cricket",                               # Ecotron that contains the RhizoCam
+        "gantry": "http://192.168.162.186:8501/",        # gantry operation
+        "analysis": "http://192.168.162.186:8502/",      # analysis pipeline
     },
-    # Example to add more:
     # {"host": "Ladybug", "gantry": "http://<ip>:8501/", "analysis": "http://<ip>:8502/"},
 ]
 
-# Sidebar directory (collapsible in Streamlit UI)
+# Sidebar directory (your existing behavior kept)
 st.sidebar.title("Devices")
 q = st.sidebar.text_input("Filter by name or IP", value="")
 room_filter = st.sidebar.selectbox("Room", ["All","Ecolab 1","Ecolab 2","Ecolab 3"])
 
-# Group & render MAIN devices (kept exactly as you had)
 rooms_order = ["Ecolab 1","Ecolab 2","Ecolab 3"] if room_filter=="All" else [room_filter]
 for room_name in rooms_order:
     with st.sidebar.expander(room_name, expanded=True):
@@ -124,37 +121,35 @@ for room_name in rooms_order:
 
 st.sidebar.markdown("---")
 
-# ── NEW: RhizoCam units menu (keeps the same Room tab/filter)
+# ── RhizoCam units menu (FIXED: only shows in host's room)
 st.sidebar.subheader("RhizoCam units")
 for room_name in rooms_order:
+    # filter rhizocams whose host is in this room
+    room_rhizo = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
+    if not room_rhizo:
+        continue
     with st.sidebar.expander(room_name, expanded=False):
-        # list only RhizoCams that live in this room (via their host device)
-        any_in_room = False
-        for rc in RHIZOCAMS:
+        for rc in room_rhizo:
             host = rc["host"]
-            room, typ = meta_for(host)  # room/type of the host Ecotron
-            if room_name != room and room_filter != "All":
-                continue
             gantry_ip = ip_from(rc["gantry"])
             analysis_ip = ip_from(rc["analysis"])
-            # filter by search box (name or either IP)
-            if q and (q.lower() not in host.lower() and q.lower() not in gantry_ip and q.lower() not in analysis_ip):
+            # search filter
+            if q and (q.lower() not in host.lower()
+                      and q.lower() not in gantry_ip
+                      and q.lower() not in analysis_ip):
                 continue
-            any_in_room = True
             st.markdown(
                 f"**📷 RhizoCam @ {host}**  \n"
                 f"`Gantry: {gantry_ip}`  \n"
                 f"`Analysis: {analysis_ip}`  \n"
                 f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})",
-                help=f"{room} • RhizoCam inside {host}"
+                help=f"{room_name} • RhizoCam inside {host}"
             )
-        if not any_in_room:
-            st.caption("No RhizoCam units in this room yet.")
 
 st.sidebar.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HEADER WITH LOGOS + TITLE (unchanged except 5 cm height + no cropping)
+# HEADER WITH LOGOS + TITLE (5 cm height, no cropping)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
@@ -172,7 +167,7 @@ st.markdown("""
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ANALYTICS (your stable code below — unchanged)
+# ANALYTICS (stable code below — unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
@@ -271,7 +266,7 @@ def resample_data(df, freq):
     if 'timestamp' not in df.columns: return df
     frames = []
     for (device, room), group in df.groupby(['device', 'room']):
-        group = group.set_index('timestamp').sort_index()
+        group = group.set_index('timestamp').sortIndex()
         resampled = group[numeric_cols].resample(freq).mean()
         resampled['device'] = device
         resampled['room'] = room
