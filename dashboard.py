@@ -3,12 +3,43 @@ import pandas as pd
 import plotly.express as px
 import zipfile
 import re
+import hashlib
 from typing import List, Tuple
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Visualization Dashboard | NPEC Ecotrons", layout="wide")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UTILS
+# ─────────────────────────────────────────────────────────────────────────────
+def normalize(name: str) -> str:
+    """Lowercase and strip spaces, hyphens, underscores for consistent matching."""
+    return re.sub(r"[\s\-_]+", "", name.lower())
+
+def ip_from(url: str) -> str:
+    try:
+        return url.split("//", 1)[1].split("/", 1)[0]
+    except Exception:
+        return url
+
+def check_password(pw: str) -> bool:
+    """
+    Password check for locking the left menu.
+    Priority:
+      1) st.secrets['SIDEBAR_PASSWORD_HASH']  (sha256 hex)
+      2) st.secrets['SIDEBAR_PASSWORD']       (plain text)
+      3) fallback 'npec' (for local/dev)
+    """
+    hash_secret = st.secrets.get("SIDEBAR_PASSWORD_HASH", "").strip()
+    if hash_secret:
+        return hashlib.sha256(pw.encode()).hexdigest() == hash_secret
+    plain_secret = st.secrets.get("SIDEBAR_PASSWORD", "").strip()
+    if plain_secret:
+        return pw == plain_secret
+    # fallback for convenience
+    return pw == "npec"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DEVICE DIRECTORY (SIDEBAR)
@@ -79,150 +110,146 @@ META = {
     "caterpillar":("Ecolab 3","Basic"), "potatobeetle":("Ecolab 3","Basic"), "cricket":("Ecolab 3","Basic"),
 }
 def meta_for(name: str):
-    return META.get(name.lower().replace(" ", ""), ("Ecolab 3", "Basic"))
+    return META.get(normalize(name), ("Ecolab 3", "Basic"))
 
-def ip_from(url: str) -> str:
-    try:
-        return url.split("//",1)[1].split("/",1)[0]
-    except Exception:
-        return url
-
-# ── RhizoCam units (add more entries below as needed)
+# ── RhizoCam units
 RHIZOCAMS = [
-    {
-        "host": "Cricket",                               # Ecotron that contains the RhizoCam
-        "gantry": "http://192.168.162.186:8501/",        # gantry operation
-        "analysis": "http://192.168.162.186:8502/",      # analysis pipeline
-    },
-    # {"host": "Ladybug", "gantry": "http://<ip>:8501/", "analysis": "http://<ip>:8502/"},
+    {"host": "Cricket", "gantry": "http://192.168.162.186:8501/", "analysis": "http://192.168.162.186:8502/"},
+    # add more as needed…
 ]
 
-# ── IP CAMERAS (NEW, hard-coded)
-# Normalize vendor names to canonical device names used in META/DEVICES
-_CANON = {
-    "Dung-Beetle": "Dung beetle",
-    "Firebug": "Fire bug",
-    "Millipedes": "Millipede",
-    "Potato-Beetle": "Potato beetle",
-    "Scorpio": "Scorpion",
-    "Stag-beetle": "Stag beetle",
-    "YellowJacket": "Yellowjacket",
+# ── IP Cameras (from your list)
+_IPC = {
+    "Admiral":"192.168.162.45", "Ant":"192.168.162.65", "Bumblebee":"192.168.162.68",
+    "Caterpillar":"192.168.162.77", "Centipede":"192.168.162.62", "Cockroach":"192.168.162.54",
+    "Cricket":"192.168.162.79", "Dragonfly":"192.168.162.52", "Dung-Beetle":"192.168.162.64",
+    "Firebug":"192.168.162.61", "Flea":"192.168.162.50", "Fly":"192.168.162.55",
+    "Giraffe":"192.168.162.161", "Hercules":"192.168.162.71", "Honeybee":"192.168.162.69",
+    "Hornet":"192.168.162.66", "Ladybug":"192.168.162.47", "Longhorn":"192.168.162.74",
+    "Mantis":"192.168.162.56", "Maybug":"192.168.162.67", "Millipedes":"192.168.162.60",
+    "Mosquito":"192.168.162.49", "Moth":"192.168.162.53", "Potato-Beetle":"192.168.162.78",
+    "Scarab":"192.168.162.46", "Scorpio":"192.168.162.76", "Stag-beetle":"192.168.162.48",
+    "Stick":"192.168.162.130", "Stink":"192.168.162.70", "Strider":"192.168.162.72",
+    "Tarantula":"192.168.162.63", "Termite":"192.168.162.58", "Tick":"192.168.162.57",
+    "Ulysses":"192.168.162.44", "Weaver":"192.168.162.75", "YellowJacket":"192.168.162.140",
 }
-def _canon(name: str) -> str:
-    return _CANON.get(name, name)
-
-# Build list as dicts {device, url}
-IP_CAMERAS = [
-    {"device": _canon("Admiral"), "url": "http://192.168.162.45/"},
-    {"device": _canon("Ant"), "url": "http://192.168.162.65/"},
-    {"device": _canon("Bumblebee"), "url": "http://192.168.162.68/"},
-    {"device": _canon("Caterpillar"), "url": "http://192.168.162.77/"},
-    {"device": _canon("Centipede"), "url": "http://192.168.162.62/"},
-    {"device": _canon("Cockroach"), "url": "http://192.168.162.54/"},
-    {"device": _canon("Cricket"), "url": "http://192.168.162.79/"},
-    {"device": _canon("Dragonfly"), "url": "http://192.168.162.52/"},
-    {"device": _canon("Dung-Beetle"), "url": "http://192.168.162.64/"},
-    {"device": _canon("Firebug"), "url": "http://192.168.162.61/"},
-    {"device": _canon("Flea"), "url": "http://192.168.162.50/"},
-    {"device": _canon("Fly"), "url": "http://192.168.162.55/"},
-    {"device": _canon("Giraffe"), "url": "http://192.168.162.161/"},
-    {"device": _canon("Hercules"), "url": "http://192.168.162.71/"},
-    {"device": _canon("Honeybee"), "url": "http://192.168.162.69/"},
-    {"device": _canon("Hornet"), "url": "http://192.168.162.66/"},
-    {"device": _canon("Ladybug"), "url": "http://192.168.162.47/"},
-    {"device": _canon("Longhorn"), "url": "http://192.168.162.74/"},
-    {"device": _canon("Mantis"), "url": "http://192.168.162.56/"},
-    {"device": _canon("Maybug"), "url": "http://192.168.162.67/"},
-    {"device": _canon("Millipedes"), "url": "http://192.168.162.60/"},
-    {"device": _canon("Mosquito"), "url": "http://192.168.162.49/"},
-    {"device": _canon("Moth"), "url": "http://192.168.162.53/"},
-    {"device": _canon("Potato-Beetle"), "url": "http://192.168.162.78/"},
-    {"device": _canon("Scarab"), "url": "http://192.168.162.46/"},
-    {"device": _canon("Scorpio"), "url": "http://192.168.162.76/"},
-    {"device": _canon("Stag-beetle"), "url": "http://192.168.162.48/"},
-    {"device": _canon("Stick"), "url": "http://192.168.162.130/"},
-    {"device": _canon("Stink"), "url": "http://192.168.162.70/"},
-    {"device": _canon("Strider"), "url": "http://192.168.162.72/"},
-    {"device": _canon("Tarantula"), "url": "http://192.168.162.63/"},
-    {"device": _canon("Termite"), "url": "http://192.168.162.58/"},
-    {"device": _canon("Tick"), "url": "http://192.168.162.57/"},
-    {"device": _canon("Ulysses"), "url": "http://192.168.162.44/"},
-    {"device": _canon("Weaver"), "url": "http://192.168.162.75/"},
-    {"device": _canon("YellowJacket"), "url": "http://192.168.162.140/"},
-]
-
-# Sidebar directory (your existing behavior kept)
-st.sidebar.title("Devices")
-q = st.sidebar.text_input("Filter by name or IP", value="")
-room_filter = st.sidebar.selectbox("Room", ["All","Ecolab 1","Ecolab 2","Ecolab 3"])
-
-rooms_order = ["Ecolab 1","Ecolab 2","Ecolab 3"] if room_filter=="All" else [room_filter]
-for room_name in rooms_order:
-    with st.sidebar.expander(room_name, expanded=True):
-        for name, url in DEVICES:
-            room, typ = meta_for(name)
-            if room_name != room and room_filter != "All":
-                continue
-            if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
-                continue
-            emoji = EMOJI.get(name, "🔗")
-            st.markdown(
-                f"**{emoji} {name}**  \n"
-                f"`{ip_from(url)}` • *{typ}*  \n"
-                f"[Open ↗]({url})",
-                help=f"{room} • {typ}"
-            )
-
-st.sidebar.markdown("---")
-
-# ── RhizoCam units menu (only shows in host's room)
-st.sidebar.subheader("RhizoCam units")
-for room_name in rooms_order:
-    room_rhizo = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
-    if not room_rhizo:
-        continue
-    with st.sidebar.expander(room_name, expanded=False):
-        for rc in room_rhizo:
-            host = rc["host"]
-            gantry_ip = ip_from(rc["gantry"])
-            analysis_ip = ip_from(rc["analysis"])
-            if q and (q.lower() not in host.lower()
-                      and q.lower() not in gantry_ip
-                      and q.lower() not in analysis_ip):
-                continue
-            st.markdown(
-                f"**📷 RhizoCam @ {host}**  \n"
-                f"`Gantry: {gantry_ip}`  \n"
-                f"`Analysis: {analysis_ip}`  \n"
-                f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})",
-                help=f"{room_name} • RhizoCam inside {host}"
-            )
-
-# ── IP Cameras (NEW): grouped by room, respects search box
-st.sidebar.subheader("IP cameras")
-for room_name in rooms_order:
-    cams_here = [c for c in IP_CAMERAS if meta_for(c["device"])[0] == room_name]
-    if not cams_here:
-        continue
-    with st.sidebar.expander(room_name, expanded=False):
-        for cam in cams_here:
-            dev = cam["device"]
-            url = cam["url"]
-            ip = ip_from(url)
-            # search filter
-            if q and (q.lower() not in dev.lower() and q.lower() not in ip.lower()):
-                continue
-            st.markdown(
-                f"🎥 **{dev}**  \n"
-                f"`{ip}`  \n"
-                f"[Open ↗]({url})",
-                help=f"{room_name} • IP camera"
-            )
-
-st.sidebar.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
+# Map camera name -> canonical device name for room grouping
+_CAM_CANON = {
+    "dungbeetle": "Dung beetle",
+    "potatobeetle": "Potato beetle",
+    "yellowjacket": "Yellowjacket",
+    "stagbeetle": "Stag beetle",
+    "millipedes": "Millipede",
+    "firebug": "Fire bug",
+    "scorpio": "Scorpion",
+}
+def camera_room(name: str) -> str:
+    canon = _CAM_CANON.get(normalize(name), name)
+    return meta_for(canon)[0]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HEADER WITH LOGOS + TITLE (5 cm height, no cropping)
+# SIDEBAR (LOCKABLE)  — all sections default collapsed
+# ─────────────────────────────────────────────────────────────────────────────
+if "menu_unlocked" not in st.session_state:
+    st.session_state.menu_unlocked = False
+
+with st.sidebar:
+    st.title("Devices")
+
+    if not st.session_state.menu_unlocked:
+        st.info("🔒 Left menu is locked. Enter password to unlock.")
+        pw = st.text_input("Password", type="password", key="__sb_pw")
+        col_a, col_b = st.columns([1,1])
+        with col_a:
+            if st.button("Unlock"):
+                if check_password(pw or ""):
+                    st.session_state.menu_unlocked = True
+                    st.success("Menu unlocked.")
+                else:
+                    st.error("Wrong password.")
+        with col_b:
+            st.caption("Default: **npec** (set secrets for production).")
+
+    else:
+        top_row = st.columns([2,1,1])
+        with top_row[0]:
+            q = st.text_input("Filter by name or IP", value="", key="__filter_q")
+        with top_row[1]:
+            room_filter = st.selectbox("Room", ["All","Ecolab 1","Ecolab 2","Ecolab 3"], key="__room_sel")
+        with top_row[2]:
+            if st.button("Lock menu", use_container_width=True):
+                st.session_state.menu_unlocked = False
+                st.stop()
+
+        rooms_order = ["Ecolab 1","Ecolab 2","Ecolab 3"] if room_filter=="All" else [room_filter]
+
+        # Devices
+        for room_name in rooms_order:
+            with st.expander(room_name, expanded=False):
+                for name, url in DEVICES:
+                    room, typ = meta_for(name)
+                    if room != room_name:  # filtered by room section
+                        continue
+                    if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
+                        continue
+                    emoji = EMOJI.get(name, "🔗")
+                    st.markdown(
+                        f"**{emoji} {name}**  \n"
+                        f"`{ip_from(url)}` • *{typ}*  \n"
+                        f"[Open ↗]({url})"
+                    )
+
+        st.markdown("---")
+
+        # RhizoCam units (grouped by host room)
+        st.subheader("RhizoCam units")
+        for room_name in rooms_order:
+            room_rhizo = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
+            if not room_rhizo:
+                continue
+            with st.expander(room_name, expanded=False):
+                for rc in room_rhizo:
+                    host = rc["host"]
+                    gantry_ip = ip_from(rc["gantry"])
+                    analysis_ip = ip_from(rc["analysis"])
+                    if q and (q.lower() not in host.lower() and q.lower() not in gantry_ip and q.lower() not in analysis_ip):
+                        continue
+                    st.markdown(
+                        f"**📷 RhizoCam @ {host}**  \n"
+                        f"`Gantry: {gantry_ip}`  \n"
+                        f"`Analysis: {analysis_ip}`  \n"
+                        f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
+                    )
+
+        st.markdown("---")
+
+        # IP cameras
+        st.subheader("IP cameras")
+        # build per-room groups
+        cams_by_room = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
+        for cam_name, cam_ip in _IPC.items():
+            r = camera_room(cam_name)
+            if r in cams_by_room:
+                cams_by_room[r].append((cam_name, cam_ip))
+
+        for room_name in rooms_order:
+            items = cams_by_room.get(room_name, [])
+            if not items:
+                continue
+            with st.expander(room_name, expanded=False):
+                for cam_name, cam_ip in sorted(items, key=lambda t: t[0].lower()):
+                    if q and (q.lower() not in cam_name.lower() and q not in cam_ip):
+                        continue
+                    st.markdown(
+                        f"**🎥 {cam_name}**  \n"
+                        f"`{cam_ip}`  \n"
+                        f"[Open ↗](http://{cam_ip}/)"
+                    )
+
+        st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HEADER WITH LOGOS + TITLE (approx. 5 cm height, no cropping)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
@@ -240,8 +267,9 @@ st.markdown("""
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ANALYTICS (stable code below — unchanged)
+# ROBUST UPLOAD SECTION (fragment + stable widget keys)
 # ─────────────────────────────────────────────────────────────────────────────
+MAX_ROWS = 50000
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
     "Ladybug": "Room 1", "Yellowjacket": "Room 1", "Flea": "Room 1",
@@ -251,7 +279,6 @@ room_assignments = {
     "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
     "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2"
 }
-MAX_ROWS = 50000
 
 def load_data(uploaded_files, max_rows=MAX_ROWS):
     data_frames, total_rows = [], 0
@@ -306,23 +333,32 @@ def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
         return pd.DataFrame()
     return pd.concat(data_frames, ignore_index=True)
 
-st.title('Upload CSV or ZIP files')
-uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
-uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
-if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
-    st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
+@st.fragment  # isolates the chunk so sidebar interactions don't re-mount uploader JS
+def data_loader_fragment():
+    st.title('Upload CSV or ZIP files')
+    uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv", key="csv_uploader_key")
+    uploaded_zip   = st.file_uploader("Upload a ZIP file containing CSV files", type="zip", key="zip_uploader_key")
 
-data = pd.DataFrame()
-if uploaded_files:
-    data = load_data(uploaded_files)
-elif uploaded_zip:
-    data = load_data_from_zip(uploaded_zip)
-else:
-    st.stop()
+    if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
+        st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
 
+    # Load logic happens here; results stored into session_state
+    if uploaded_files:
+        st.session_state.data_df = load_data(uploaded_files)
+    elif uploaded_zip:
+        st.session_state.data_df = load_data_from_zip(uploaded_zip)
+    else:
+        st.session_state.data_df = pd.DataFrame()
+
+data_loader_fragment()
+
+data = st.session_state.get("data_df", pd.DataFrame())
 if data.empty:
     st.stop()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TIMESTAMPS & RESAMPLING
+# ─────────────────────────────────────────────────────────────────────────────
 try:
     data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
 except Exception as e:
@@ -334,12 +370,14 @@ selected_freq_label = st.selectbox("Select Data Frequency (downsampling)", list(
 selected_freq = sampling_options[selected_freq_label]
 
 def resample_data(df, freq):
-    if freq == "10T": return df
+    if freq == "10T":
+        return df
     numeric_cols = df.select_dtypes(include='number').columns
-    if 'timestamp' not in df.columns: return df
+    if 'timestamp' not in df.columns:
+        return df
     frames = []
     for (device, room), group in df.groupby(['device', 'room']):
-        group = group.set_index('timestamp').sortIndex()  # (kept exactly as in your stable code)
+        group = group.set_index('timestamp').sort_index()
         resampled = group[numeric_cols].resample(freq).mean()
         resampled['device'] = device
         resampled['room'] = room
@@ -357,7 +395,8 @@ data = data[columns]
 def looks_like_data_point(col):
     try:
         float(str(col)); return True
-    except: pass
+    except Exception:
+        pass
     if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)): return True
     if len(str(col)) < 3: return True
     return False
@@ -404,9 +443,11 @@ final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x)
 try:
     start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
     if start_date > end_date:
-        st.error("Error: End date must be after start date."); st.stop()
+        st.error("Error: End date must be after start date.")
+        st.stop()
 except Exception as e:
-    st.error(f"Error with date input: {e}"); st.stop()
+    st.error(f"Error with date input: {e}")
+    st.stop()
 
 filtered_data = data[
     (data['room'].isin(selected_rooms)) &
