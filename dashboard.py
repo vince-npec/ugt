@@ -120,13 +120,13 @@ st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png"
              alt="Ecotron Module"
-             style="height: 189px; width: auto; border-radius: 999px; object-fit: contain;" />
+             style="height: 189px; width: auto;" />
         <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
             Visualization Dashboard | <b style="font-weight:700;">NPEC Ecotrons</b>
         </h1>
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png"
              alt="NPEC"
-             style="height: 189px; width: auto; object-fit: contain;" />
+             style="height: 189px; width: auto;" />
     </div>
 """, unsafe_allow_html=True)
 st.markdown("---")
