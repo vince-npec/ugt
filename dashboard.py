@@ -87,12 +87,24 @@ def ip_from(url: str) -> str:
     except Exception:
         return url
 
+# ── NEW: RhizoCam units (hosted inside Ecotrons)
+# Add more entries here following the same structure.
+RHIZOCAMS = [
+    {
+        "host": "Cricket",  # Ecotron device that contains this RhizoCam
+        "gantry": "http://192.168.162.186:8501/",    # gantry operation
+        "analysis": "http://192.168.162.186:8502/",  # analysis pipeline
+    },
+    # Example to add more:
+    # {"host": "Ladybug", "gantry": "http://<ip>:8501/", "analysis": "http://<ip>:8502/"},
+]
+
 # Sidebar directory (collapsible in Streamlit UI)
 st.sidebar.title("Devices")
 q = st.sidebar.text_input("Filter by name or IP", value="")
 room_filter = st.sidebar.selectbox("Room", ["All","Ecolab 1","Ecolab 2","Ecolab 3"])
 
-# Group & render
+# Group & render MAIN devices (kept exactly as you had)
 rooms_order = ["Ecolab 1","Ecolab 2","Ecolab 3"] if room_filter=="All" else [room_filter]
 for room_name in rooms_order:
     with st.sidebar.expander(room_name, expanded=True):
@@ -111,10 +123,38 @@ for room_name in rooms_order:
             )
 
 st.sidebar.markdown("---")
+
+# ── NEW: RhizoCam units menu (keeps the same Room tab/filter)
+st.sidebar.subheader("RhizoCam units")
+for room_name in rooms_order:
+    with st.sidebar.expander(room_name, expanded=False):
+        # list only RhizoCams that live in this room (via their host device)
+        any_in_room = False
+        for rc in RHIZOCAMS:
+            host = rc["host"]
+            room, typ = meta_for(host)  # room/type of the host Ecotron
+            if room_name != room and room_filter != "All":
+                continue
+            gantry_ip = ip_from(rc["gantry"])
+            analysis_ip = ip_from(rc["analysis"])
+            # filter by search box (name or either IP)
+            if q and (q.lower() not in host.lower() and q.lower() not in gantry_ip and q.lower() not in analysis_ip):
+                continue
+            any_in_room = True
+            st.markdown(
+                f"**📷 RhizoCam @ {host}**  \n"
+                f"`Gantry: {gantry_ip}`  \n"
+                f"`Analysis: {analysis_ip}`  \n"
+                f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})",
+                help=f"{room} • RhizoCam inside {host}"
+            )
+        if not any_in_room:
+            st.caption("No RhizoCam units in this room yet.")
+
 st.sidebar.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HEADER WITH LOGOS + TITLE (NPEC logo smaller)
+# HEADER WITH LOGOS + TITLE (unchanged except 5 cm height + no cropping)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
@@ -132,7 +172,7 @@ st.markdown("""
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ANALYTICS (your stable code, unchanged)
+# ANALYTICS (your stable code below — unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
