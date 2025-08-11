@@ -4,6 +4,7 @@ import plotly.express as px
 import zipfile
 import re
 from typing import List, Tuple
+import os, glob  # <-- used only for IP cameras loader
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -97,6 +98,47 @@ RHIZOCAMS = [
     # {"host": "Ladybug", "gantry": "http://<ip>:8501/", "analysis": "http://<ip>:8502/"},
 ]
 
+# ── IP Cameras (NEW) — loaded from ipcameras.csv or ipcameras.xlsx (device, label, url)
+def load_ip_cameras():
+    """
+    Looks for a cameras file in the app root:
+      - ipcameras.xlsx  (preferred)  OR any 'ipcameras*.xlsx'
+      - ipcameras.csv   OR any 'ipcameras*.csv'
+    Expected columns (case-insensitive): device, label, url
+    Returns list of dicts: {device, label, url}
+    """
+    candidates = []
+    candidates += glob.glob("ipcameras*.xlsx")
+    candidates += glob.glob("ipcameras*.csv")
+    df = None
+    for path in candidates:
+        try:
+            if path.lower().endswith(".xlsx"):
+                df = pd.read_excel(path)
+            elif path.lower().endswith(".csv"):
+                df = pd.read_csv(path)
+            if df is not None and not df.empty:
+                break
+        except Exception:
+            continue
+    if df is None or df.empty:
+        return []  # no cameras configured yet
+    # normalize columns
+    cols = {c.lower().strip(): c for c in df.columns}
+    need = {"device","label","url"}
+    if not need.issubset(cols.keys()):
+        return []
+    df = df.rename(columns={cols["device"]:"device", cols["label"]:"label", cols["url"]:"url"})
+    # drop rows with missing url/device
+    df = df.dropna(subset=["device","url"])
+    # coerce to string
+    df["device"] = df["device"].astype(str)
+    df["label"] = df["label"].astype(str).fillna("")
+    df["url"] = df["url"].astype(str)
+    return df.to_dict(orient="records")
+
+IP_CAMERAS = load_ip_cameras()
+
 # Sidebar directory (your existing behavior kept)
 st.sidebar.title("Devices")
 q = st.sidebar.text_input("Filter by name or IP", value="")
@@ -121,10 +163,9 @@ for room_name in rooms_order:
 
 st.sidebar.markdown("---")
 
-# ── RhizoCam units menu (FIXED: only shows in host's room)
+# ── RhizoCam units menu (only shows in host's room)
 st.sidebar.subheader("RhizoCam units")
 for room_name in rooms_order:
-    # filter rhizocams whose host is in this room
     room_rhizo = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
     if not room_rhizo:
         continue
@@ -133,7 +174,6 @@ for room_name in rooms_order:
             host = rc["host"]
             gantry_ip = ip_from(rc["gantry"])
             analysis_ip = ip_from(rc["analysis"])
-            # search filter
             if q and (q.lower() not in host.lower()
                       and q.lower() not in gantry_ip
                       and q.lower() not in analysis_ip):
@@ -145,6 +185,32 @@ for room_name in rooms_order:
                 f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})",
                 help=f"{room_name} • RhizoCam inside {host}"
             )
+
+# ── IP Cameras (NEW): grouped by room, respects search box
+if IP_CAMERAS:
+    st.sidebar.subheader("IP cameras")
+    for room_name in rooms_order:
+        cams_here = [c for c in IP_CAMERAS if meta_for(c["device"])[0] == room_name]
+        if not cams_here:
+            continue
+        with st.sidebar.expander(room_name, expanded=False):
+            for cam in cams_here:
+                dev = cam["device"]
+                label = cam.get("label","").strip()
+                url = cam["url"]
+                ip = ip_from(url)
+                # search filter
+                if q and (q.lower() not in dev.lower()
+                          and q.lower() not in label.lower()
+                          and q.lower() not in ip.lower()):
+                    continue
+                shown = f"🎥 **{dev}** — {label}" if label else f"🎥 **{dev}**"
+                st.markdown(
+                    f"{shown}  \n"
+                    f"`{ip}`  \n"
+                    f"[Open ↗]({url})",
+                    help=f"{room_name} • IP camera"
+                )
 
 st.sidebar.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
@@ -266,7 +332,7 @@ def resample_data(df, freq):
     if 'timestamp' not in df.columns: return df
     frames = []
     for (device, room), group in df.groupby(['device', 'room']):
-        group = group.set_index('timestamp').sortIndex()
+        group = group.set_index('timestamp').sortIndex()  # (kept exactly as in your stable code)
         resampled = group[numeric_cols].resample(freq).mean()
         resampled['device'] = device
         resampled['room'] = room
