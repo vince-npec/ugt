@@ -1,10 +1,12 @@
-import streamlit as st
+# dashboard.py
+import os
+import re
+from typing import List, Tuple
+
 import pandas as pd
 import plotly.express as px
+import streamlit as st
 import zipfile
-import re
-import hashlib
-from typing import List, Tuple
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -12,11 +14,28 @@ from typing import List, Tuple
 st.set_page_config(page_title="Visualization Dashboard | NPEC Ecotrons", layout="wide")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UTILS
+# UTILITIES / CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-def normalize(name: str) -> str:
-    """Lowercase and strip spaces, hyphens, underscores for consistent matching."""
-    return re.sub(r"[\s\-_]+", "", name.lower())
+def normalize_name(name: str) -> str:
+    """Normalize device/camera names so they match META keys."""
+    s = name.strip().lower().replace("-", " ").replace("_", " ")
+    # Known aliases
+    fixes = {
+        "firebug": "fire bug",
+        "stag beetle": "stag beetle",
+        "stag  beetle": "stag beetle",
+        "stag-beetle": "stag beetle",
+        "yellowjacket": "yellowjacket",
+        "yellow jacket": "yellowjacket",
+        "dung beetle": "dung beetle",
+        "dung-beetle": "dung beetle",
+        "millipedes": "millipede",
+        "scorpio": "scorpion",
+        "potato beetle": "potato beetle",
+        "potato-beetle": "potato beetle",
+    }
+    s = fixes.get(s, s)
+    return s
 
 def ip_from(url: str) -> str:
     try:
@@ -24,25 +43,11 @@ def ip_from(url: str) -> str:
     except Exception:
         return url
 
-def check_password(pw: str) -> bool:
-    """
-    Password check for locking the left menu.
-    Priority:
-      1) st.secrets['SIDEBAR_PASSWORD_HASH']  (sha256 hex)
-      2) st.secrets['SIDEBAR_PASSWORD']       (plain text)
-      3) fallback 'npec' (for local/dev)
-    """
-    hash_secret = st.secrets.get("SIDEBAR_PASSWORD_HASH", "").strip()
-    if hash_secret:
-        return hashlib.sha256(pw.encode()).hexdigest() == hash_secret
-    plain_secret = st.secrets.get("SIDEBAR_PASSWORD", "").strip()
-    if plain_secret:
-        return pw == plain_secret
-    # fallback for convenience
-    return pw == "npec"
+# Sidebar password (optional)
+SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEVICE DIRECTORY (SIDEBAR)
+# DEVICE DIRECTORY (SIDEBAR DATA)
 # ─────────────────────────────────────────────────────────────────────────────
 DEVICES: List[Tuple[str, str]] = [
     ("Ulysses", "http://192.168.162.8/visu/#/main"),
@@ -84,192 +89,178 @@ DEVICES: List[Tuple[str, str]] = [
 ]
 
 EMOJI = {
-    "Ulysses":"🦋","Admiral":"🦋","Scarab":"🪲","Ladybug":"🐞","Stag beetle":"🪲",
-    "Mosquito":"🦟","Flea":"🪳","Yellowjacket":"🐝","Dragonfly":"🐉","Moth":"🦋",
-    "Cockroach":"🪳","Fly":"🪰","Mantis":"🦗","Tick":"🕷️","Termite":"🐜","Giraffe":"🦒",
-    "Millipede":"🪱","Fire bug":"🔥","Centipede":"🪱","Tarantula":"🕷️","Dung beetle":"🪲",
-    "Ant":"🐜","Hornet":"🐝","Maybug":"🪲","Bumblebee":"🐝","Honeybee":"🐝","Stink":"💨",
-    "Hercules":"💪","Strider":"🚶","Stick":"🪵","Longhorn":"🐂","Weaver":"🧵","Scorpion":"🦂",
-    "Caterpillar":"🐛","Potato beetle":"🥔🪲","Cricket":"🦗",
+    "ulysses":"🦋","admiral":"🦋","scarab":"🪲","ladybug":"🐞","stag beetle":"🪲",
+    "mosquito":"🦟","flea":"🪳","yellowjacket":"🐝","dragonfly":"🐉","moth":"🦋",
+    "cockroach":"🪳","fly":"🪰","mantis":"🦗","tick":"🕷️","termite":"🐜","giraffe":"🦒",
+    "millipede":"🪱","fire bug":"🔥","centipede":"🪱","tarantula":"🕷️","dung beetle":"🪲",
+    "ant":"🐜","hornet":"🐝","maybug":"🪲","bumblebee":"🐝","honeybee":"🐝","stink":"💨",
+    "hercules":"💪","strider":"🚶","stick":"🪵","longhorn":"🐂","weaver":"🧵","scorpion":"🦂",
+    "caterpillar":"🐛","potato beetle":"🥔🪲","cricket":"🦗",
 }
 
-# Room/type mapping (from your table)
+# Room/type mapping
 META = {
     "ulysses":("Ecolab 1","Advanced"), "admiral":("Ecolab 1","Advanced"), "scarab":("Ecolab 1","Advanced"),
     "ladybug":("Ecolab 1","Advanced"), "yellowjacket":("Ecolab 1","Advanced"), "flea":("Ecolab 1","Advanced"),
-    "mosquito":("Ecolab 1","Advanced"), "stagbeetle":("Ecolab 1","Advanced"),
+    "mosquito":("Ecolab 1","Advanced"), "stag beetle":("Ecolab 1","Advanced"),
     "dragonfly":("Ecolab 2","Basic"), "moth":("Ecolab 2","Basic"), "cockroach":("Ecolab 2","Basic"),
     "fly":("Ecolab 2","Basic"), "mantis":("Ecolab 2","Basic"), "tick":("Ecolab 2","Basic"),
     "termite":("Ecolab 2","Basic"), "giraffe":("Ecolab 2","Basic"), "millipede":("Ecolab 2","Basic"),
-    "firebug":("Ecolab 2","Basic"), "centipede":("Ecolab 2","Basic"), "tarantula":("Ecolab 2","Basic"),
-    "dungbeetle":("Ecolab 3","Basic"), "ant":("Ecolab 3","Basic"), "hornet":("Ecolab 3","Basic"),
+    "fire bug":("Ecolab 2","Basic"), "centipede":("Ecolab 2","Basic"), "tarantula":("Ecolab 2","Basic"),
+    "dung beetle":("Ecolab 3","Basic"), "ant":("Ecolab 3","Basic"), "hornet":("Ecolab 3","Basic"),
     "maybug":("Ecolab 3","Basic"), "bumblebee":("Ecolab 3","Basic"), "honeybee":("Ecolab 3","Basic"),
     "stink":("Ecolab 3","Basic"), "hercules":("Ecolab 3","Basic"), "strider":("Ecolab 3","Basic"),
     "stick":("Ecolab 3","Basic"), "longhorn":("Ecolab 3","Basic"),
     "weaver":("Ecolab 3","Basic"), "scorpion":("Ecolab 3","Basic"),
-    "caterpillar":("Ecolab 3","Basic"), "potatobeetle":("Ecolab 3","Basic"), "cricket":("Ecolab 3","Basic"),
+    "caterpillar":("Ecolab 3","Basic"), "potato beetle":("Ecolab 3","Basic"), "cricket":("Ecolab 3","Basic"),
 }
-def meta_for(name: str):
-    return META.get(normalize(name), ("Ecolab 3", "Basic"))
 
-# ── RhizoCam units
+def meta_for(name: str):
+    return META.get(normalize_name(name), ("Ecolab 3", "Basic"))
+
+# RhizoCam units (per host Ecotron)
 RHIZOCAMS = [
     {"host": "Cricket", "gantry": "http://192.168.162.186:8501/", "analysis": "http://192.168.162.186:8502/"},
-    # add more as needed…
 ]
 
-# ── IP Cameras (from your list)
-_IPC = {
-    "Admiral":"192.168.162.45", "Ant":"192.168.162.65", "Bumblebee":"192.168.162.68",
-    "Caterpillar":"192.168.162.77", "Centipede":"192.168.162.62", "Cockroach":"192.168.162.54",
-    "Cricket":"192.168.162.79", "Dragonfly":"192.168.162.52", "Dung-Beetle":"192.168.162.64",
-    "Firebug":"192.168.162.61", "Flea":"192.168.162.50", "Fly":"192.168.162.55",
-    "Giraffe":"192.168.162.161", "Hercules":"192.168.162.71", "Honeybee":"192.168.162.69",
-    "Hornet":"192.168.162.66", "Ladybug":"192.168.162.47", "Longhorn":"192.168.162.74",
-    "Mantis":"192.168.162.56", "Maybug":"192.168.162.67", "Millipedes":"192.168.162.60",
-    "Mosquito":"192.168.162.49", "Moth":"192.168.162.53", "Potato-Beetle":"192.168.162.78",
-    "Scarab":"192.168.162.46", "Scorpio":"192.168.162.76", "Stag-beetle":"192.168.162.48",
-    "Stick":"192.168.162.130", "Stink":"192.168.162.70", "Strider":"192.168.162.72",
-    "Tarantula":"192.168.162.63", "Termite":"192.168.162.58", "Tick":"192.168.162.57",
-    "Ulysses":"192.168.162.44", "Weaver":"192.168.162.75", "YellowJacket":"192.168.162.140",
-}
-# Map camera name -> canonical device name for room grouping
-_CAM_CANON = {
-    "dungbeetle": "Dung beetle",
-    "potatobeetle": "Potato beetle",
-    "yellowjacket": "Yellowjacket",
-    "stagbeetle": "Stag beetle",
-    "millipedes": "Millipede",
-    "firebug": "Fire bug",
-    "scorpio": "Scorpion",
-}
-def camera_room(name: str) -> str:
-    canon = _CAM_CANON.get(normalize(name), name)
-    return meta_for(canon)[0]
+# IP camera list (name -> ip)
+IP_CAMERAS = [
+    ("Admiral","192.168.162.45"), ("Ant","192.168.162.65"), ("Bumblebee","192.168.162.68"),
+    ("Caterpillar","192.168.162.77"), ("Centipede","192.168.162.62"), ("Cockroach","192.168.162.54"),
+    ("Cricket","192.168.162.79"), ("Dragonfly","192.168.162.52"), ("Dung beetle","192.168.162.64"),
+    ("Fire bug","192.168.162.61"), ("Flea","192.168.162.50"), ("Fly","192.168.162.55"),
+    ("Giraffe","192.168.162.161"), ("Hercules","192.168.162.71"), ("Honeybee","192.168.162.69"),
+    ("Hornet","192.168.162.66"), ("Ladybug","192.168.162.47"), ("Longhorn","192.168.162.74"),
+    ("Mantis","192.168.162.56"), ("Maybug","192.168.162.67"), ("Millipede","192.168.162.60"),
+    ("Mosquito","192.168.162.49"), ("Moth","192.168.162.53"), ("Potato beetle","192.168.162.78"),
+    ("Scarab","192.168.162.46"), ("Scorpion","192.168.162.76"), ("Stag beetle","192.168.162.48"),
+    ("Stick","192.168.162.130"), ("Stink","192.168.162.70"), ("Strider","192.168.162.72"),
+    ("Tarantula","192.168.162.63"), ("Termite","192.168.162.58"), ("Tick","192.168.162.57"),
+    ("Ulysses","192.168.162.44"), ("Weaver","192.168.162.75"), ("Yellowjacket","192.168.162.140"),
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR (LOCKABLE)  — all sections default collapsed
+# SIDEBAR (with optional password lock) — ALL GROUPS COLLAPSED BY DEFAULT
 # ─────────────────────────────────────────────────────────────────────────────
-if "menu_unlocked" not in st.session_state:
-    st.session_state.menu_unlocked = False
+if "sidebar_unlocked" not in st.session_state:
+    st.session_state.sidebar_unlocked = (SIDEBAR_PASS == "")
 
 with st.sidebar:
     st.title("Devices")
 
-    if not st.session_state.menu_unlocked:
-        st.info("🔒 Left menu is locked. Enter password to unlock.")
-        pw = st.text_input("Password", type="password", key="__sb_pw")
-        col_a, col_b = st.columns([1,1])
-        with col_a:
-            if st.button("Unlock"):
-                if check_password(pw or ""):
-                    st.session_state.menu_unlocked = True
-                    st.success("Menu unlocked.")
-                else:
-                    st.error("Wrong password.")
-        with col_b:
-            st.caption("Default: **npec** (set secrets for production).")
-
-    else:
-        top_row = st.columns([2,1,1])
-        with top_row[0]:
-            q = st.text_input("Filter by name or IP", value="", key="__filter_q")
-        with top_row[1]:
-            room_filter = st.selectbox("Room", ["All","Ecolab 1","Ecolab 2","Ecolab 3"], key="__room_sel")
-        with top_row[2]:
+    # Lock / Unlock controls
+    cols = st.columns([1, 1, 1.2])
+    with cols[2]:
+        if st.session_state.sidebar_unlocked:
             if st.button("Lock menu", use_container_width=True):
-                st.session_state.menu_unlocked = False
-                st.stop()
+                st.session_state.sidebar_unlocked = False
+                st.rerun()
+        elif SIDEBAR_PASS:
+            with st.popover("Unlock"):
+                pw = st.text_input("Password", type="password", placeholder="••••••")
+                if st.button("Unlock"):
+                    if pw == SIDEBAR_PASS:
+                        st.session_state.sidebar_unlocked = True
+                        st.rerun()
+                    else:
+                        st.error("Wrong password")
 
-        rooms_order = ["Ecolab 1","Ecolab 2","Ecolab 3"] if room_filter=="All" else [room_filter]
+    # When locked, hide the rest of the menu
+    if not st.session_state.sidebar_unlocked and SIDEBAR_PASS:
+        st.caption("Menu locked. Click **Unlock** to enter the password.")
+    else:
+        # Filters
+        q = st.text_input("Filter by name or IP", value="")
+        room_filter = st.selectbox("Room", ["All", "Ecolab 1", "Ecolab 2", "Ecolab 3"], index=0)
 
-        # Devices
+        rooms_order = ["Ecolab 1", "Ecolab 2", "Ecolab 3"] if room_filter == "All" else [room_filter]
+
+        # Devices (by room)
         for room_name in rooms_order:
             with st.expander(room_name, expanded=False):
                 for name, url in DEVICES:
                     room, typ = meta_for(name)
-                    if room != room_name:  # filtered by room section
+                    if room != room_name:
                         continue
                     if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
                         continue
-                    emoji = EMOJI.get(name, "🔗")
+                    key = normalize_name(name)
+                    emoji = EMOJI.get(key, "🔗")
                     st.markdown(
                         f"**{emoji} {name}**  \n"
                         f"`{ip_from(url)}` • *{typ}*  \n"
-                        f"[Open ↗]({url})"
+                        f"[Open ↗]({url})",
+                        help=f"{room} • {typ}",
                     )
 
         st.markdown("---")
 
-        # RhizoCam units (grouped by host room)
+        # RhizoCam units — only in their host room
         st.subheader("RhizoCam units")
         for room_name in rooms_order:
-            room_rhizo = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
-            if not room_rhizo:
+            items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
+            if not items:
                 continue
             with st.expander(room_name, expanded=False):
-                for rc in room_rhizo:
+                for rc in items:
                     host = rc["host"]
-                    gantry_ip = ip_from(rc["gantry"])
-                    analysis_ip = ip_from(rc["analysis"])
-                    if q and (q.lower() not in host.lower() and q.lower() not in gantry_ip and q.lower() not in analysis_ip):
+                    g_ip, a_ip = ip_from(rc["gantry"]), ip_from(rc["analysis"])
+                    if q and all(q.lower() not in s.lower() for s in (host, g_ip, a_ip)):
                         continue
                     st.markdown(
                         f"**📷 RhizoCam @ {host}**  \n"
-                        f"`Gantry: {gantry_ip}`  \n"
-                        f"`Analysis: {analysis_ip}`  \n"
+                        f"`Gantry:` `{g_ip}`  \n"
+                        f"`Analysis:` `{a_ip}`  \n"
                         f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
                     )
 
         st.markdown("---")
 
-        # IP cameras
+        # IP cameras — grouped by room
         st.subheader("IP cameras")
-        # build per-room groups
         cams_by_room = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
-        for cam_name, cam_ip in _IPC.items():
-            r = camera_room(cam_name)
-            if r in cams_by_room:
-                cams_by_room[r].append((cam_name, cam_ip))
+        for cam_name, ip in IP_CAMERAS:
+            room, _ = meta_for(cam_name)
+            cams_by_room[room].append((cam_name, ip))
 
         for room_name in rooms_order:
-            items = cams_by_room.get(room_name, [])
-            if not items:
-                continue
             with st.expander(room_name, expanded=False):
-                for cam_name, cam_ip in sorted(items, key=lambda t: t[0].lower()):
-                    if q and (q.lower() not in cam_name.lower() and q not in cam_ip):
+                for cam_name, ip in cams_by_room.get(room_name, []):
+                    if q and (q.lower() not in cam_name.lower() and q.lower() not in ip.lower()):
                         continue
+                    key = normalize_name(cam_name)
+                    emoji = EMOJI.get(key, "🎥")
+                    url = f"http://{ip}"
                     st.markdown(
-                        f"**🎥 {cam_name}**  \n"
-                        f"`{cam_ip}`  \n"
-                        f"[Open ↗](http://{cam_ip}/)"
+                        f"**{emoji} {cam_name}**  \n"
+                        f"`{ip}`  \n"
+                        f"[Open ↗]({url})"
                     )
 
         st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HEADER WITH LOGOS + TITLE (approx. 5 cm height, no cropping)
+# HEADER WITH LOGOS + TITLE (≈5 cm height, no cropping)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("""
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/Module-1-icon.png"
-             alt="Ecotron Module"
-             style="height: 189px; width: auto;" />
-        <h1 style="text-align: center; color: white; flex-grow: 1; margin: 0; font-size: 2.6rem; font-weight: 400;">
+             alt="Ecotron Module" style="height:189px;width:auto;" />
+        <h1 style="text-align:center;color:white;flex-grow:1;margin:0;font-size:2.6rem;font-weight:400;">
             Visualization Dashboard | <b style="font-weight:700;">NPEC Ecotrons</b>
         </h1>
         <img src="https://raw.githubusercontent.com/vince-npec/ugt/main/NPEC-dashboard-logo.png"
-             alt="NPEC"
-             style="height: 189px; width: auto;" />
+             alt="NPEC" style="height:189px;width:auto;" />
     </div>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROBUST UPLOAD SECTION (fragment + stable widget keys)
+# ANALYTICS (your stable code, unchanged logic; small safety tweaks)
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_ROWS = 50000
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
     "Ladybug": "Room 1", "Yellowjacket": "Room 1", "Flea": "Room 1",
@@ -277,8 +268,9 @@ room_assignments = {
     "Cockroach": "Room 2", "Termite": "Room 2", "Centipede": "Room 2",
     "Fly": "Room 2", "Giraffe": "Room 2", "Tarantula": "Room 2",
     "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
-    "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2"
+    "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2",
 }
+MAX_ROWS = 50_000
 
 def load_data(uploaded_files, max_rows=MAX_ROWS):
     data_frames, total_rows = [], 0
@@ -288,11 +280,11 @@ def load_data(uploaded_files, max_rows=MAX_ROWS):
             device_name = uploaded_file.name.split('_')[0]
             if device_name == "Fire": device_name = "Fire bug"
             elif device_name == "Stag": device_name = "Stag beetle"
-            df['device'] = device_name
-            df['room'] = room_assignments.get(device_name, "Unknown")
+            df["device"] = device_name
+            df["room"] = room_assignments.get(device_name, "Unknown")
             if not df.empty:
                 if total_rows + len(df) > max_rows:
-                    df = df.iloc[:max_rows - total_rows]
+                    df = df.iloc[: max_rows - total_rows]
                 data_frames.append(df)
                 total_rows += len(df)
                 if total_rows >= max_rows:
@@ -309,18 +301,18 @@ def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
     data_frames, total_rows = [], 0
     with zipfile.ZipFile(zip_file) as z:
         for filename in z.namelist():
-            if filename.endswith('.csv') and not filename.startswith('__MACOSX/'):
+            if filename.endswith(".csv") and not filename.startswith("__MACOSX/"):
                 with z.open(filename) as f:
                     try:
                         df = pd.read_csv(f, delimiter=';')
                         device_name = filename.split('/')[0].split('_')[0]
                         if device_name == "Fire": device_name = "Fire bug"
                         elif device_name == "Stag": device_name = "Stag beetle"
-                        df['device'] = device_name
-                        df['room'] = room_assignments.get(device_name, "Unknown")
+                        df["device"] = device_name
+                        df["room"] = room_assignments.get(device_name, "Unknown")
                         if not df.empty:
                             if total_rows + len(df) > max_rows:
-                                df = df.iloc[:max_rows - total_rows]
+                                df = df.iloc[: max_rows - total_rows]
                             data_frames.append(df)
                             total_rows += len(df)
                             if total_rows >= max_rows:
@@ -333,34 +325,25 @@ def load_data_from_zip(zip_file, max_rows=MAX_ROWS):
         return pd.DataFrame()
     return pd.concat(data_frames, ignore_index=True)
 
-@st.fragment  # isolates the chunk so sidebar interactions don't re-mount uploader JS
-def data_loader_fragment():
-    st.title('Upload CSV or ZIP files')
-    uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv", key="csv_uploader_key")
-    uploaded_zip   = st.file_uploader("Upload a ZIP file containing CSV files", type="zip", key="zip_uploader_key")
+st.title("Upload CSV or ZIP files")
+uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
+uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
+if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
+    st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
 
-    if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
-        st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
+data = pd.DataFrame()
+if uploaded_files:
+    data = load_data(uploaded_files)
+elif uploaded_zip:
+    data = load_data_from_zip(uploaded_zip)
+else:
+    st.stop()
 
-    # Load logic happens here; results stored into session_state
-    if uploaded_files:
-        st.session_state.data_df = load_data(uploaded_files)
-    elif uploaded_zip:
-        st.session_state.data_df = load_data_from_zip(uploaded_zip)
-    else:
-        st.session_state.data_df = pd.DataFrame()
-
-data_loader_fragment()
-
-data = st.session_state.get("data_df", pd.DataFrame())
 if data.empty:
     st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TIMESTAMPS & RESAMPLING
-# ─────────────────────────────────────────────────────────────────────────────
 try:
-    data['timestamp'] = pd.to_datetime(data['timestamp'], format='%d.%m.%Y %H:%M:%S')
+    data["timestamp"] = pd.to_datetime(data["timestamp"], format="%d.%m.%Y %H:%M:%S")
 except Exception as e:
     st.error(f"Error converting timestamp: {e}")
     st.stop()
@@ -369,79 +352,82 @@ sampling_options = {"Raw (10 min)": "10T", "30 min": "30T", "Hourly": "1H", "Dai
 selected_freq_label = st.selectbox("Select Data Frequency (downsampling)", list(sampling_options.keys()), index=0)
 selected_freq = sampling_options[selected_freq_label]
 
-def resample_data(df, freq):
+def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     if freq == "10T":
         return df
-    numeric_cols = df.select_dtypes(include='number').columns
-    if 'timestamp' not in df.columns:
+    if "timestamp" not in df.columns:
         return df
+    numeric_cols = df.select_dtypes(include="number").columns
     frames = []
-    for (device, room), group in df.groupby(['device', 'room']):
-        group = group.set_index('timestamp').sort_index()
+    for (device, room), group in df.groupby(["device", "room"]):
+        group = group.set_index("timestamp").sort_index()
         resampled = group[numeric_cols].resample(freq).mean()
-        resampled['device'] = device
-        resampled['room'] = room
+        resampled["device"] = device
+        resampled["room"] = room
         frames.append(resampled.reset_index())
     return pd.concat(frames, ignore_index=True) if frames else df
 
 data = resample_data(data, selected_freq)
 
-numeric_cols = data.select_dtypes(include='number').columns
+numeric_cols = data.select_dtypes(include="number").columns
 data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
-columns = ['device', 'room'] + [c for c in data.columns if c not in ['device', 'room']]
+columns = ["device", "room"] + [c for c in data.columns if c not in ["device", "room"]]
 data = data[columns]
 
 def looks_like_data_point(col):
     try:
-        float(str(col)); return True
+        float(str(col))
+        return True
     except Exception:
         pass
-    if re.match(r'^\d{2}\.\d{2}\.\d{4}', str(col)): return True
-    if len(str(col)) < 3: return True
+    if re.match(r"^\d{2}\.\d{2}\.\d{4}", str(col)):
+        return True
+    if len(str(col)) < 3:
+        return True
     return False
 
-all_columns = [c for c in data.columns if c not in ['timestamp','device','room'] and not looks_like_data_point(c)]
+all_columns = [c for c in data.columns if c not in ["timestamp", "device", "room"] and not looks_like_data_point(c)]
 
 standard_parameters = [
-    'Atmosphere temperature (°C)', 'Atmosphere humidity (% RH)',
-    'FRT tension 1 (kPa)', 'FRT tension 2 (kPa)', 'FRT tension 3 (kPa)',
-    'SMT temperature 1 (°C)', 'SMT temperature 2 (°C)', 'SMT temperature 3 (°C)',
-    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)'
+    "Atmosphere temperature (°C)", "Atmosphere humidity (% RH)",
+    "FRT tension 1 (kPa)", "FRT tension 2 (kPa)", "FRT tension 3 (kPa)",
+    "SMT temperature 1 (°C)", "SMT temperature 2 (°C)", "SMT temperature 3 (°C)",
+    "SMT water content 1 (%)", "SMT water content 2 (%)", "SMT water content 3 (%)",
 ]
 dcc_parameters = [
-    'SMT water content 1 (%)', 'SMT water content 2 (%)', 'SMT water content 3 (%)',
-    'Current Days Irrigation (L)', 'Lysimeter weight (Kg)', 'LBC tank weight (Kg)'
+    "SMT water content 1 (%)", "SMT water content 2 (%)", "SMT water content 3 (%)",
+    "Current Days Irrigation (L)", "Lysimeter weight (Kg)", "LBC tank weight (Kg)",
 ]
 
-devices_list = data['device'].unique()
-device_options = ['All'] + devices_list.tolist()
-rooms_list = data['room'].unique()
-room_options = ['All'] + rooms_list.tolist()
+devices_list = data["device"].unique()
+device_options = ["All"] + devices_list.tolist()
+rooms_list = data["room"].unique()
+room_options = ["All"] + rooms_list.tolist()
 
-st.title('Sensor Data Dashboard')
+st.title("Sensor Data Dashboard")
 
-selected_rooms = st.multiselect('Select Rooms', room_options, default='All')
-if 'All' in selected_rooms:
+selected_rooms = st.multiselect("Select Rooms", room_options, default="All")
+if "All" in selected_rooms:
     selected_rooms = rooms_list.tolist()
 
-selected_devices = st.multiselect('Select Devices', device_options, default='All')
-if 'All' in selected_devices:
+selected_devices = st.multiselect("Select Devices", device_options, default="All")
+if "All" in selected_devices:
     selected_devices = devices_list.tolist()
 
-parameter_options = ['Standard Parameters', 'DCC project'] + all_columns if all_columns else ['Standard Parameters', 'DCC project']
-selected_parameters = st.multiselect('Select Parameters', parameter_options)
+parameter_options = (["Standard Parameters", "DCC project"] + all_columns) if all_columns else ["Standard Parameters", "DCC project"]
+selected_parameters = st.multiselect("Select Parameters", parameter_options)
 
 final_parameters, seen = [], set()
-if 'Standard Parameters' in selected_parameters:
+if "Standard Parameters" in selected_parameters:
     final_parameters += [p for p in standard_parameters if p in all_columns]
-if 'DCC project' in selected_parameters:
+if "DCC project" in selected_parameters:
     final_parameters += [p for p in dcc_parameters if p in all_columns]
-final_parameters += [p for p in selected_parameters if p not in ['Standard Parameters', 'DCC project']]
+final_parameters += [p for p in selected_parameters if p not in ["Standard Parameters", "DCC project"]]
 final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
 try:
-    start_date, end_date = st.date_input('Select Date Range', [data['timestamp'].min(), data['timestamp'].max()])
+    start_date, end_date = st.date_input("Select Date Range", [data["timestamp"].min(), data["timestamp"].max()])
     if start_date > end_date:
         st.error("Error: End date must be after start date.")
         st.stop()
@@ -450,25 +436,29 @@ except Exception as e:
     st.stop()
 
 filtered_data = data[
-    (data['room'].isin(selected_rooms)) &
-    (data['device'].isin(selected_devices)) &
-    (data['timestamp'] >= pd.to_datetime(start_date)) &
-    (data['timestamp'] <= pd.to_datetime(end_date))
+    (data["room"].isin(selected_rooms)) &
+    (data["device"].isin(selected_devices)) &
+    (data["timestamp"] >= pd.to_datetime(start_date)) &
+    (data["timestamp"] <= pd.to_datetime(end_date))
 ]
 
 if final_parameters and not filtered_data.empty:
     for parameter in final_parameters:
         fig = px.line()
         for device in selected_devices:
-            ddf = filtered_data[filtered_data['device'] == device]
+            ddf = filtered_data[filtered_data["device"] == device]
             if parameter in ddf.columns:
-                fig.add_scatter(x=ddf['timestamp'], y=ddf[parameter],
-                                mode='lines', name=f'{device} - {parameter}', connectgaps=False)
-        fig.update_layout(title=f'Time Series Comparison for {parameter}',
-                          xaxis_title='Timestamp', yaxis_title=parameter, height=600)
+                fig.add_scatter(
+                    x=ddf["timestamp"], y=ddf[parameter],
+                    mode="lines", name=f"{device} - {parameter}", connectgaps=False
+                )
+        fig.update_layout(
+            title=f"Time Series Comparison for {parameter}",
+            xaxis_title="Timestamp", yaxis_title=parameter, height=600
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader('Raw Data')
+    st.subheader("Raw Data")
     st.dataframe(filtered_data.head(100))
     if len(filtered_data) > 100:
         st.info(f"Showing first 100 of {len(filtered_data)} rows out of {len(filtered_data)} total.")
@@ -480,5 +470,5 @@ st.markdown(
     "<p style='text-align: center; color: grey; font-size: 14px;'>"
     "© 2025 NPEC Ecotron Module - Visualization Dashboard by Dr. Vinicius Lube | "
     "Phenomics Engineer Innovation Lead</p>",
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
