@@ -1,31 +1,23 @@
 """
-Streamlit dashboard for NPEC Ecotrons.
-
-This file replicates the original dashboard logic and extends it with an
-additional “Insights” tab.  The Insights tab allows users to analyse
-moisture and tension data, set their own targets for each soil level, and
-receive irrigation recommendations or sensor fault warnings.
-
-In this version, the target tension values are automatically derived from
-the moisture targets using a simple linear regression between moisture and
-tension in the uploaded data.  This removes the need to guess appropriate
-tension values when setting moisture setpoints.
+Streamlit dashboard for NPEC Ecotrons with user-defined moisture targets
+and automatically derived tension targets.  This version corrects the
+recommendation logic by treating higher tension as drier soil and
+clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa).
 """
 
 import os
 import re
+import zipfile
 from typing import List, Tuple
 
-import numpy as np  # Added for computing tension targets
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import zipfile
 
 ###############################################################################
 # PAGE CONFIG
 ###############################################################################
-# Use a wide layout to make charts easier to read.
 st.set_page_config(
     page_title="Visualization Dashboard | NPEC Ecotrons",
     layout="wide",
@@ -35,9 +27,7 @@ st.set_page_config(
 # UTILITIES / CONSTANTS
 ###############################################################################
 def normalize_name(name: str) -> str:
-    """
-    Normalize device/camera names so they match META keys.
-    """
+    """Normalize device/camera names so they match META keys."""
     s = name.strip().lower().replace("-", " ").replace("_", " ")
     fixes = {
         "firebug": "fire bug",
@@ -62,7 +52,7 @@ def ip_from(url: str) -> str:
     except Exception:
         return url
 
-# Sidebar password (optional).  Set via Streamlit secrets or environment.
+# Optional password for the sidebar
 SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))
 
 ###############################################################################
@@ -139,33 +129,32 @@ META = {
     "potato beetle": ("Ecolab 3", "Basic"), "cricket": ("Ecolab 3", "Basic"),
 }
 def meta_for(name: str) -> Tuple[str, str]:
-    """Return (room, type) for a given device name."""
     return META.get(normalize_name(name), ("Ecolab 3", "Basic"))
 
-# RhizoCam units (per host Ecotron).
+# RhizoCam units
 RHIZOCAMS = [
     {"host": "Cricket", "gantry": "http://192.168.162.186:8501/", "analysis": "http://192.168.162.186:8502/"},
 ]
-# IP camera list (name -> ip).  IP cameras are grouped by room in the sidebar.
+# IP cameras
 IP_CAMERAS = [
-    ("Admiral", "192.168.162.45"), ("Ant", "192.168.162.65"),
-    ("Bumblebee", "192.168.162.68"), ("Caterpillar", "192.168.162.77"),
-    ("Centipede", "192.168.162.62"), ("Cockroach", "192.168.162.54"),
-    ("Cricket", "192.168.162.79"), ("Dragonfly", "192.168.162.52"),
-    ("Dung beetle", "192.168.162.64"), ("Fire bug", "192.168.162.61"),
-    ("Flea", "192.168.162.50"), ("Fly", "192.168.162.55"),
-    ("Giraffe", "192.168.162.161"), ("Hercules", "192.168.162.71"),
-    ("Honeybee", "192.168.162.69"), ("Hornet", "192.168.162.66"),
-    ("Ladybug", "192.168.162.47"), ("Longhorn", "192.168.162.74"),
-    ("Mantis", "192.168.162.56"), ("Maybug", "192.168.162.67"),
-    ("Millipede", "192.168.162.60"), ("Mosquito", "192.168.162.49"),
-    ("Moth", "192.168.162.53"), ("Potato beetle", "192.168.162.78"),
-    ("Scarab", "192.168.162.46"), ("Scorpion", "192.168.162.76"),
-    ("Stag beetle", "192.168.162.48"), ("Stick", "192.168.162.130"),
-    ("Stink", "192.168.162.70"), ("Strider", "192.168.162.72"),
-    ("Tarantula", "192.168.162.63"), ("Termite", "192.168.162.58"),
-    ("Tick", "192.168.162.57"), ("Ulysses", "192.168.162.44"),
-    ("Weaver", "192.168.162.75"), ("Yellowjacket", "192.168.162.140"),
+    ("Admiral","192.168.162.45"), ("Ant","192.168.162.65"),
+    ("Bumblebee","192.168.162.68"), ("Caterpillar","192.168.162.77"),
+    ("Centipede","192.168.162.62"), ("Cockroach","192.168.162.54"),
+    ("Cricket","192.168.162.79"), ("Dragonfly","192.168.162.52"),
+    ("Dung beetle","192.168.162.64"), ("Fire bug","192.168.162.61"),
+    ("Flea","192.168.162.50"), ("Fly","192.168.162.55"),
+    ("Giraffe","192.168.162.161"), ("Hercules","192.168.162.71"),
+    ("Honeybee","192.168.162.69"), ("Hornet","192.168.162.66"),
+    ("Ladybug","192.168.162.47"), ("Longhorn","192.168.162.74"),
+    ("Mantis","192.168.162.56"), ("Maybug","192.168.162.67"),
+    ("Millipede","192.168.162.60"), ("Mosquito","192.168.162.49"),
+    ("Moth","192.168.162.53"), ("Potato beetle","192.168.162.78"),
+    ("Scarab","192.168.162.46"), ("Scorpion","192.168.162.76"),
+    ("Stag beetle","192.168.162.48"), ("Stick","192.168.162.130"),
+    ("Stink","192.168.162.70"), ("Strider","192.168.162.72"),
+    ("Tarantula","192.168.162.63"), ("Termite","192.168.162.58"),
+    ("Tick","192.168.162.57"), ("Ulysses","192.168.162.44"),
+    ("Weaver","192.168.162.75"), ("Yellowjacket","192.168.162.140"),
 ]
 
 ###############################################################################
@@ -224,7 +213,7 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # RhizoCam units — only in their host room
+        # RhizoCam units
         st.subheader("RhizoCam units")
         for room_name in rooms_order:
             items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
@@ -377,7 +366,10 @@ def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else df
 
 def looks_like_data_point(col):
-    """Heuristically determine if a column name is likely to represent a data point."""
+    """
+    Heuristically determine if a column name is likely to represent a data
+    point (numeric), based on simple string checks.
+    """
     try:
         float(str(col))
         return True
@@ -388,6 +380,31 @@ def looks_like_data_point(col):
     if len(str(col)) < 3:
         return True
     return False
+
+def derive_tension_targets(data: pd.DataFrame,
+                           moisture_cols: List[str],
+                           tension_cols: List[str],
+                           moisture_targets: dict) -> dict:
+    """
+    Fit a linear regression between moisture and tension for each level and compute
+    a target tension for each level, clamped to the sensor range (–100 to +1500 kPa).
+    """
+    targets = {}
+    for i, m_col in enumerate(sorted(moisture_cols)):
+        t_col = sorted(tension_cols)[i]
+        x = data[m_col].astype(float)
+        y = data[t_col].astype(float)
+        mask = (~x.isna()) & (~y.isna())
+        if mask.sum() > 1:
+            slope, intercept = np.polyfit(x[mask], y[mask], 1)
+        else:
+            # Fallback slope/intercept
+            slope, intercept = -2.0, y.median()
+        predicted = intercept + slope * moisture_targets[m_col]
+        # Clamp predicted tension to valid range
+        predicted = max(-100, min(1500, predicted))
+        targets[t_col] = predicted
+    return targets
 
 ###############################################################################
 # USER INTERFACE: DATA UPLOAD
@@ -554,7 +571,6 @@ with tab_insights:
         ],
     )
 
-    # Compute summary statistics up front
     moisture_cols = [col for col in filtered_data.columns if col.startswith("SMT water content")]
     tension_cols = [col for col in filtered_data.columns if col.startswith("FRT tension")]
     summary_df = (
@@ -567,63 +583,42 @@ with tab_insights:
         st.markdown(
             """
             **Objective:** Bring soil moisture and tension levels across all devices
-            into consistent ranges at each sensor level. Use the sliders below
-            to specify your desired target volumetric water content (VWC) for
-            each level.  Target tensions are automatically derived from the
-            moisture targets using a linear fit between moisture and tension in
-            your data.  The dashboard will compare these targets against the
-            observed averages and suggest whether to add or remove water for
-            each device and level.
+            into consistent ranges at each sensor level.  Specify your desired
+            moisture content for each level below.  The dashboard derives tension
+            targets automatically (using a linear fit and clamping them to the
+            sensor’s valid range) and recommends whether to
+            add or remove water for each device and level.
             """
         )
 
         if summary_df.empty:
             st.info("No data to analyse for moisture homogenisation.")
         else:
-            # Compute default moisture targets from the median across devices
+            # Ask user for moisture targets; use medians as defaults
             default_targets_moisture = {
-                moisture_cols[i]: round(summary_df[moisture_cols[i]].median(), 2)
-                for i in range(len(moisture_cols))
+                m_col: round(summary_df[m_col].median(), 2)
+                for m_col in sorted(moisture_cols)
             }
-
-            st.write("### Set target moisture content (%VWC) for each level")
             moisture_inputs = {}
-            moisture_cols_sorted = sorted(moisture_cols)
-            cols_m = st.columns(len(moisture_cols_sorted))
-            for i, col in enumerate(moisture_cols_sorted):
+            cols_m = st.columns(len(sorted(moisture_cols)))
+            for i, m_col in enumerate(sorted(moisture_cols)):
                 with cols_m[i]:
-                    level = i + 1
-                    moisture_inputs[col] = st.number_input(
-                        f"Level {level}",
+                    moisture_inputs[m_col] = st.number_input(
+                        f"Level {i+1}",
                         min_value=0.0,
                         max_value=100.0,
-                        value=float(default_targets_moisture[col]),
+                        value=float(default_targets_moisture[m_col]),
                         step=0.1,
                         format="%.1f",
                     )
 
-            # Compute linear regression for tension vs. moisture at each level
-            tension_cols_sorted = sorted(tension_cols)
-            tension_funcs = []
-            for i, m_col in enumerate(moisture_cols_sorted):
-                t_col = tension_cols_sorted[i]
-                x = filtered_data[m_col].astype(float)
-                y = filtered_data[t_col].astype(float)
-                if len(x) > 1 and x.std() > 0:
-                    slope, intercept = np.polyfit(x, y, 1)
-                else:
-                    # Fallback: approximate slope and intercept
-                    slope, intercept = -2.0, summary_df[t_col].median()
-                tension_funcs.append((slope, intercept))
-
-            # Derive and display target tension values from the moisture inputs
-            st.write("### Derived target tension (kPa) based on moisture targets")
-            target_tension_values = {}
-            for i, (slope, intercept) in enumerate(tension_funcs):
-                m_col = moisture_cols_sorted[i]
-                predicted_tension = intercept + slope * moisture_inputs[m_col]
-                target_tension_values[tension_cols_sorted[i]] = predicted_tension
-                st.write(f"Level {i+1}: {predicted_tension:.1f} kPa")
+            # Derive tension targets from moisture targets
+            target_tension_values = derive_tension_targets(
+                filtered_data, moisture_cols, tension_cols, moisture_inputs
+            )
+            st.write("### Derived target tension (kPa)")
+            for i, t_col in enumerate(sorted(tension_cols)):
+                st.write(f"Level {i+1}: {target_tension_values[t_col]:.1f} kPa")
 
             st.write("### Average moisture and tension per device")
             # Plot moisture averages
@@ -650,23 +645,21 @@ with tab_insights:
             )
             st.plotly_chart(fig_tension, use_container_width=True)
 
-            # Compute irrigation recommendations
+            # Compute irrigation recommendations: higher tension = drier soil
             recs = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
                 device_rec = {"device": device}
-                for i, m_col in enumerate(moisture_cols_sorted):
-                    t_col = tension_cols_sorted[i]
-                    # Differences to targets
+                for i, m_col in enumerate(sorted(moisture_cols)):
+                    t_col = sorted(tension_cols)[i]
                     moisture_diff = moisture_inputs[m_col] - row[m_col]
-                    predicted_tension = target_tension_values[t_col]
-                    tension_diff = predicted_tension - row[t_col]
-                    # Combine differences: positive dryness_score means too dry
+                    tension_diff = row[t_col] - target_tension_values[t_col]
+                    # dryness_score > 0 means add water
                     dryness_score = moisture_diff + tension_diff / 10.0
                     action = "Add" if dryness_score > 0 else "Remove"
-                    recommended_change = round(dryness_score * 0.05, 3)
+                    change_litres = round(abs(dryness_score) * 0.05, 3)
                     device_rec[f"Level {i+1} action"] = action
-                    device_rec[f"Level {i+1} change (L)"] = recommended_change
+                    device_rec[f"Level {i+1} change (L)"] = change_litres
                 recs.append(device_rec)
 
             rec_df = pd.DataFrame(recs)
@@ -695,12 +688,12 @@ with tab_insights:
             alerts = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
-                for i, col in enumerate(moisture_cols):
-                    moisture_val = row[col]
+                for i, m_col in enumerate(moisture_cols):
+                    moisture_val = row[m_col]
                     if pd.isna(moisture_val) or moisture_val == 0:
                         alerts.append(f"{device}: Moisture sensor level {i+1} appears disconnected or reporting 0 %.")
-                for i, col in enumerate(tension_cols):
-                    tension_val = row[col]
+                for i, t_col in enumerate(tension_cols):
+                    tension_val = row[t_col]
                     if pd.isna(tension_val) or abs(tension_val) > 1500:
                         alerts.append(f"{device}: Tensiometer level {i+1} out of range (|value| > 1500 kPa).")
             if alerts:
