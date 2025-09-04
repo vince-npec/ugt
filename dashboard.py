@@ -1,17 +1,15 @@
 """
-Streamlit dashboard for NPEC Ecotrons
-This file replicates the original dashboard logic provided by the user and
-extends it with an additional “Insights” tab.  The Insights tab makes it
-possible to analyse moisture and tension data across devices and provide
-suggestions for homogenising soil moisture levels or detecting sensor
-issues.  Broken or disconnected probes are highlighted and alerts are
-displayed (and would be emailed to the operator in a production system).
+Streamlit dashboard for NPEC Ecotrons.
 
-The existing page structure – including the sidebar with devices, RhizoCam
-units and cameras, the data upload interface, and the standard visualisation
-tools – remains unchanged.  The new tab lives alongside the original
-visualisations so that users can choose between viewing raw sensor
-information and performing higher‑level analyses.
+This file replicates the original dashboard logic and extends it with an
+additional “Insights” tab.  The Insights tab allows users to analyse
+moisture and tension data, set their own targets for each soil level, and
+receive irrigation recommendations or sensor fault warnings.
+
+The script loads logs from CSV files or ZIP archives, lets users downsample
+and filter the data by date, device and room, and plots time series for
+selected parameters.  In the Insights tab users can homogenise moisture and
+tension across devices or detect malfunctioning probes.
 """
 
 import os
@@ -26,20 +24,22 @@ import zipfile
 ###############################################################################
 # PAGE CONFIG
 ###############################################################################
-# Set up the Streamlit page.  Use a wide layout to give charts more room.
-st.set_page_config(page_title="Visualization Dashboard | NPEC Ecotrons", layout="wide")
+# Use a wide layout to make charts easier to read.
+st.set_page_config(
+    page_title="Visualization Dashboard | NPEC Ecotrons",
+    layout="wide",
+)
 
 ###############################################################################
 # UTILITIES / CONSTANTS
 ###############################################################################
 def normalize_name(name: str) -> str:
     """
-    Normalize device/camera names so they match META keys.  This helper
-    collapses whitespace and handles a few common aliases so that lookups
-    against the META mapping are robust.
+    Normalize device/camera names so they match META keys.
+    This helper collapses whitespace and handles a few common aliases so that
+    lookups against the META mapping are robust.
     """
     s = name.strip().lower().replace("-", " ").replace("_", " ")
-    # Known aliases
     fixes = {
         "firebug": "fire bug",
         "stag beetle": "stag beetle",
@@ -56,31 +56,20 @@ def normalize_name(name: str) -> str:
     }
     return fixes.get(s, s)
 
-
 def ip_from(url: str) -> str:
-    """Extract an IP (or host) from a URL.
-
-    If parsing fails the original string is returned.  This helper is used
-    throughout the dashboard to display the host portion of device URLs in
-    the sidebar.
-    """
+    """Extract an IP (or host) from a URL.  If parsing fails the original string is returned."""
     try:
         return url.split("//", 1)[1].split("/", 1)[0]
     except Exception:
         return url
 
-
-# Sidebar password (optional).  This can be set via Streamlit secrets or the
-# environment.  When set, the sidebar will be locked by default until the
-# correct password is entered.
+# Sidebar password (optional).  Set via Streamlit secrets or environment.
 SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))
 
 ###############################################################################
 # DEVICE DIRECTORY (SIDEBAR DATA)
 ###############################################################################
-# List of Ecotron devices and their control UI endpoints.  These are used
-# purely for display purposes in the sidebar – clicking a link opens the
-# respective device’s UI in a new browser tab.
+# List of Ecotron devices and their control UI endpoints.
 DEVICES: List[Tuple[str, str]] = [
     ("Ulysses", "http://192.168.162.8/visu/#/main"),
     ("Admiral", "http://192.168.162.9/visu/#/main"),
@@ -119,9 +108,7 @@ DEVICES: List[Tuple[str, str]] = [
     ("Potato beetle", "http://192.168.162.42/visu/#/main"),
     ("Cricket", "http://192.168.162.43/visu/#/main"),
 ]
-
-# Emoji mapping for cute icons next to each device.  Keys are normalised via
-# ``normalize_name`` and values are strings containing the emoji.
+# Emoji mapping for cute icons next to each device.
 EMOJI = {
     "ulysses": "🦋", "admiral": "🦋", "scarab": "🪲", "ladybug": "🐞",
     "stag beetle": "🪲", "mosquito": "🦟", "flea": "🪳", "yellowjacket": "🐝",
@@ -134,10 +121,7 @@ EMOJI = {
     "scorpion": "🦂", "caterpillar": "🐛", "potato beetle": "🥔🪲",
     "cricket": "🦗",
 }
-
-# Room/type mapping.  Each device is assigned to a room and a type (Advanced
-# vs Basic) for grouping in the sidebar.  Normalisation via ``normalize_name``
-# ensures that strings like "Stag beetle" and "Stag  beetle" map correctly.
+# Room/type mapping for grouping devices in the sidebar.
 META = {
     "ulysses": ("Ecolab 1", "Advanced"), "admiral": ("Ecolab 1", "Advanced"),
     "scarab": ("Ecolab 1", "Advanced"), "ladybug": ("Ecolab 1", "Advanced"),
@@ -158,25 +142,14 @@ META = {
     "scorpion": ("Ecolab 3", "Basic"), "caterpillar": ("Ecolab 3", "Basic"),
     "potato beetle": ("Ecolab 3", "Basic"), "cricket": ("Ecolab 3", "Basic"),
 }
-
-
 def meta_for(name: str) -> Tuple[str, str]:
-    """Return (room, type) for a given device name.
-
-    If the device isn’t found, default to ("Ecolab 3", "Basic").  Names
-    undergo normalisation via ``normalize_name`` before the lookup.
-    """
+    """Return (room, type) for a given device name."""
     return META.get(normalize_name(name), ("Ecolab 3", "Basic"))
 
-
-# RhizoCam units (per host Ecotron).  Each entry contains the host device name
-# along with the addresses for gantry and analysis interfaces.  These are
-# displayed in the sidebar for quick access.
+# RhizoCam units (per host Ecotron).
 RHIZOCAMS = [
     {"host": "Cricket", "gantry": "http://192.168.162.186:8501/", "analysis": "http://192.168.162.186:8502/"},
 ]
-
-
 # IP camera list (name -> ip).  IP cameras are grouped by room in the sidebar.
 IP_CAMERAS = [
     ("Admiral", "192.168.162.45"), ("Ant", "192.168.162.65"),
@@ -199,14 +172,11 @@ IP_CAMERAS = [
     ("Weaver", "192.168.162.75"), ("Yellowjacket", "192.168.162.140"),
 ]
 
-
 ###############################################################################
 # SIDEBAR (with optional password lock)
 ###############################################################################
 # The sidebar lists all devices, RhizoCam units and IP cameras.  A password
-# lock can hide these menus to prevent casual browsing.  Users can filter
-# devices by name or IP and collapse groups by room.
-
+# lock can hide these menus to prevent casual browsing.
 if "sidebar_unlocked" not in st.session_state:
     st.session_state.sidebar_unlocked = (SIDEBAR_PASS == "")
 
@@ -304,14 +274,9 @@ with st.sidebar:
 
         st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
-
 ###############################################################################
 # HEADER WITH LOGOS + TITLE
 ###############################################################################
-# Display the top-of-page header with the Ecotron module and NPEC logos.  These
-# are loaded from GitHub (as in the original dashboard) and scaled to fill the
-# header area.
-
 st.markdown(
     """
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -328,15 +293,9 @@ st.markdown(
 )
 st.markdown("---")
 
-
 ###############################################################################
 # ANALYTICS AND DATA LOADING
 ###############################################################################
-# The following section handles data upload, parsing and downsampling.  It
-# matches the original dashboard logic but has been factored so that data
-# loading occurs outside of the visualisation and insights tabs.  This allows
-# both tabs to reuse the same filtered data without re-reading or resampling.
-
 # Room assignment mapping used for default room grouping of CSV files.
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
@@ -347,10 +306,8 @@ room_assignments = {
     "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
     "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2",
 }
-
 # Limit the maximum number of rows to load for performance reasons.
 MAX_ROWS = 50_000
-
 
 def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     """
@@ -359,8 +316,7 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     Each CSV must use a semicolon (;) delimiter and begins with the device name
     followed by an underscore.  The device name is extracted from the file
     name and assigned to a new "device" column.  A "room" column is also
-    assigned using ``room_assignments``.  Rows beyond ``max_rows`` are
-    truncated to protect the dashboard from large uploads.
+    assigned using `room_assignments`.  Rows beyond `max_rows` are truncated.
     """
     data_frames, total_rows = [], 0
     for uploaded_file in uploaded_files:
@@ -388,14 +344,13 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.concat(data_frames, ignore_index=True)
 
-
 def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     """
     Load multiple CSV files from a ZIP archive.
 
     The ZIP archive may contain files in subdirectories.  Only files ending
-    in `.csv` (and not starting with ``__MACOSX/``) are processed.  Device
-    names are extracted as for ``load_data``.
+    in `.csv` (and not starting with `__MACOSX/`) are processed.  Device
+    names are extracted as for `load_data`.
     """
     data_frames, total_rows = [], 0
     with zipfile.ZipFile(zip_file) as z:
@@ -426,15 +381,13 @@ def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.concat(data_frames, ignore_index=True)
 
-
 def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     """
     Downsample the dataset using the specified frequency.
 
-    If ``freq`` is '10T' (the raw 10‑minute interval), the data is returned
+    If `freq` is '10T' (the raw 10-minute interval), the data is returned
     unchanged.  Otherwise the numeric columns are resampled using the mean,
-    grouped by device and room.  Non-numeric columns are dropped during
-    resampling; device and room columns are added back after grouping.
+    grouped by device and room.
     """
     if freq == "10T":
         return df
@@ -450,13 +403,10 @@ def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
         frames.append(resampled.reset_index())
     return pd.concat(frames, ignore_index=True) if frames else df
 
-
 def looks_like_data_point(col):
     """
     Heuristically determine if a column name is likely to represent a data
-    point (numeric), based on simple string checks.  This helps separate
-    numeric sensor data from metadata when building a list of selectable
-    parameters for charting.
+    point (numeric), based on simple string checks.
     """
     try:
         float(str(col))
@@ -469,11 +419,9 @@ def looks_like_data_point(col):
         return True
     return False
 
-
 ###############################################################################
 # USER INTERFACE: DATA UPLOAD
 ###############################################################################
-
 st.title("Upload CSV or ZIP files")
 
 uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
@@ -493,7 +441,7 @@ else:
     # No data uploaded yet; stop the app here.
     st.stop()
 
-# Convert timestamps.  The log files use a European format (DD.MM.YYYY HH:MM:SS).
+# Convert timestamps from European format (DD.MM.YYYY HH:MM:SS).
 if data.empty:
     st.stop()
 try:
@@ -502,11 +450,9 @@ except Exception as e:
     st.error(f"Error converting timestamp: {e}")
     st.stop()
 
-
 ###############################################################################
 # DATA DOWNSAMPLING AND INTERPOLATION
 ###############################################################################
-
 sampling_options = {"Raw (10 min)": "10T", "30 min": "30T", "Hourly": "1H", "Daily": "1D"}
 selected_freq_label = st.selectbox("Select Data Frequency (downsampling)", list(sampling_options.keys()), index=0)
 selected_freq = sampling_options[selected_freq_label]
@@ -524,7 +470,6 @@ data = data[columns_order]
 ###############################################################################
 # SELECTION OF ROOMS AND DEVICES
 ###############################################################################
-
 devices_list = data["device"].unique()
 device_options = ["All"] + devices_list.tolist()
 rooms_list = data["room"].unique()
@@ -540,21 +485,21 @@ selected_devices = st.multiselect("Select Devices", device_options, default="All
 if "All" in selected_devices:
     selected_devices = devices_list.tolist()
 
-# Identify columns that are not clearly data points; these represent metadata or
-# descriptive text and should not appear in the parameter selection list.
+# Identify columns that are not clearly data points; these represent metadata
+# or descriptive text and should not appear in the parameter selection list.
 all_columns = [
     c
     for c in data.columns
     if c not in ["timestamp", "device", "room"] and not looks_like_data_point(c)
 ]
 
+# Standard parameter lists used as shortcuts in the parameter picker.
 standard_parameters = [
     "Atmosphere temperature (°C)", "Atmosphere humidity (% RH)",
     "FRT tension 1 (kPa)", "FRT tension 2 (kPa)", "FRT tension 3 (kPa)",
     "SMT temperature 1 (°C)", "SMT temperature 2 (°C)", "SMT temperature 3 (°C)",
     "SMT water content 1 (%)", "SMT water content 2 (%)", "SMT water content 3 (%)",
 ]
-
 dcc_parameters = [
     "SMT water content 1 (%)", "SMT water content 2 (%)", "SMT water content 3 (%)",
     "Current Days Irrigation (L)", "Lysimeter weight (Kg)", "LBC tank weight (Kg)",
@@ -563,7 +508,6 @@ dcc_parameters = [
 ###############################################################################
 # DATE RANGE FILTERING
 ###############################################################################
-
 try:
     start_date, end_date = st.date_input(
         "Select Date Range", [data["timestamp"].min(), data["timestamp"].max()]
@@ -588,14 +532,9 @@ if filtered_data.empty:
     st.write("No data available for the selected parameters and date range.")
     st.stop()
 
-
 ###############################################################################
 # TABS: VISUALISATIONS AND INSIGHTS
 ###############################################################################
-# Create two tabs: one for the original parameter visualisations and another
-# called “Insights” for higher-level analysis.  Both tabs share the same
-# filtered dataset computed above.
-
 tab_visuals, tab_insights = st.tabs(["Visualizations", "Insights"])
 
 ###############################################################################
@@ -603,9 +542,6 @@ tab_visuals, tab_insights = st.tabs(["Visualizations", "Insights"])
 ###############################################################################
 with tab_visuals:
     st.subheader("Visualizations")
-    # Build the parameter selection list.  Users can choose between a preset
-    # collection of standard parameters, a DCC project set, or any other
-    # available column in the data that isn't obviously a numeric value.
     parameter_options = (
         ["Standard Parameters", "DCC project"] + all_columns
         if all_columns
@@ -625,8 +561,7 @@ with tab_visuals:
     final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
     # Plot each selected parameter as a time series.  Separate lines are drawn
-    # for each selected device.  If no parameters are selected, display a
-    # placeholder message.
+    # for each selected device.
     if final_parameters and not filtered_data.empty:
         for parameter in final_parameters:
             fig = px.line()
@@ -651,30 +586,22 @@ with tab_visuals:
     else:
         st.write("No data available for the selected parameters and date range.")
 
-
 ###############################################################################
 # TAB 2: INSIGHTS
 ###############################################################################
 with tab_insights:
     st.subheader("Insights")
-    # Choose an analysis task.  At present the dashboard supports homogenising
-    # moisture content across all devices and detecting potential sensor
-    # malfunctions.  Additional tasks can be added here in the future.
     insight_task = st.selectbox(
-        "Select an insights task", [
-            "Homogenize moisture content", 
+        "Select an insights task",
+        [
+            "Homogenize moisture content",
             "Detect sensor issues",
         ],
     )
 
     # Compute summary statistics up front to avoid redundant calculations.
-    # Group by device and compute mean moisture and tension per soil layer.
-    moisture_cols = [
-        col for col in filtered_data.columns if col.startswith("SMT water content")
-    ]
-    tension_cols = [
-        col for col in filtered_data.columns if col.startswith("FRT tension")
-    ]
+    moisture_cols = [col for col in filtered_data.columns if col.startswith("SMT water content")]
+    tension_cols = [col for col in filtered_data.columns if col.startswith("FRT tension")]
     summary_df = (
         filtered_data.groupby("device")[moisture_cols + tension_cols]
         .mean()
@@ -682,26 +609,65 @@ with tab_insights:
     )
 
     if insight_task == "Homogenize moisture content":
+        # Explain the objective and prompt for targets.
         st.markdown(
             """
-            **Objective:** Bring soil moisture levels across all devices into a
-            consistent range at each sensor level.  The plots below show the
-            average volumetric water content (VWC) and tension for each device.
-            Devices with moisture far from the overall median may require
-            adjustments to their irrigation schedules.
+            **Objective:** Bring soil moisture and tension levels across all devices
+            into consistent ranges at each sensor level.  Use the input fields
+            below to specify your desired target volumetric water content (VWC)
+            and tension for each level.  The dashboard will compare these
+            targets against the observed averages and suggest whether to add
+            or remove water for each device and level.
             """
         )
 
         if summary_df.empty:
             st.info("No data to analyse for moisture homogenisation.")
         else:
-            # Determine target moisture as the median across all devices for each
-            # soil level.  These targets can be used to compute suggested
-            # irrigation adjustments.
-            target_moisture = summary_df[moisture_cols].median()
+            # Default targets from the median across devices.
+            default_targets_moisture = {
+                moisture_cols[i]: round(summary_df[moisture_cols[i]].median(), 2)
+                for i in range(len(moisture_cols))
+            }
+            default_targets_tension = {
+                tension_cols[i]: round(summary_df[tension_cols[i]].median(), 2)
+                for i in range(len(tension_cols))
+            }
+
+            st.write("### Set target moisture content (%VWC) for each level")
+            moisture_inputs = {}
+            moisture_cols_sorted = sorted(moisture_cols)
+            cols_m = st.columns(len(moisture_cols_sorted))
+            for i, col in enumerate(moisture_cols_sorted):
+                with cols_m[i]:
+                    level = i + 1
+                    moisture_inputs[col] = st.number_input(
+                        f"Level {level}",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=float(default_targets_moisture[col]),
+                        step=0.1,
+                        format="%.1f",
+                    )
+
+            st.write("### Set target tension (kPa) for each level")
+            tension_inputs = {}
+            tension_cols_sorted = sorted(tension_cols)
+            cols_t = st.columns(len(tension_cols_sorted))
+            for i, col in enumerate(tension_cols_sorted):
+                with cols_t[i]:
+                    level = i + 1
+                    tension_inputs[col] = st.number_input(
+                        f"Level {level}",
+                        min_value=-200.0,
+                        max_value=200.0,
+                        value=float(default_targets_tension[col]),
+                        step=1.0,
+                        format="%.1f",
+                    )
 
             st.write("### Average moisture and tension per device")
-            # Display a bar chart for moisture by device and layer.
+            # Plot moisture averages
             moist_melt = summary_df.melt(
                 id_vars=["device"],
                 value_vars=moisture_cols,
@@ -713,7 +679,7 @@ with tab_insights:
             )
             st.plotly_chart(fig_moist, use_container_width=True)
 
-            # Display a bar chart for tension by device and layer.
+            # Plot tension averages
             tension_melt = summary_df.melt(
                 id_vars=["device"],
                 value_vars=tension_cols,
@@ -725,32 +691,32 @@ with tab_insights:
             )
             st.plotly_chart(fig_tension, use_container_width=True)
 
-            # Calculate differences from the target moisture for recommendations.
+            # Compute irrigation recommendations based on user-defined targets.
             recs = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
-                adjustments = {}
-                for col in moisture_cols:
-                    diff = target_moisture[col] - row[col]
-                    # Suggest change proportionally: positive diff -> increase irrigation.
-                    # The factor 0.05 is arbitrary and can be tuned based on system response.
-                    adj = round(diff * 0.05, 3)
-                    adjustments[col] = adj
-                recs.append((device, adjustments))
+                device_rec = {"device": device}
+                for i, m_col in enumerate(moisture_cols_sorted):
+                    t_col = tension_cols_sorted[i]
+                    # Differences to targets
+                    moisture_diff = moisture_inputs[m_col] - row[m_col]
+                    tension_diff = tension_inputs[t_col] - row[t_col]
+                    # Combine differences into a dryness score.  Positive means too dry,
+                    # negative means too wet.  The tension difference is scaled.
+                    dryness_score = moisture_diff + tension_diff / 10.0
+                    action = "Add" if dryness_score > 0 else "Remove"
+                    recommended_change = round(dryness_score * 0.05, 3)
+                    device_rec[f"Level {i+1} action"] = action
+                    device_rec[f"Level {i+1} change (L)"] = recommended_change
+                recs.append(device_rec)
 
-            # Convert recommendations into a DataFrame for display.
-            rec_df = pd.DataFrame([
-                {"device": device, **adj} for device, adj in recs
-            ])
-            # Rename columns for readability.
-            rec_df = rec_df.rename(columns={
-                moisture_cols[i]: f"Level {i+1} change (L)" for i in range(len(moisture_cols))
-            })
-
-            st.write("### Suggested irrigation adjustments")
+            rec_df = pd.DataFrame(recs)
+            st.write("### Irrigation recommendations")
             st.write(
-                "Values represent the recommended change in daily irrigation volume (litres). "
-                "Positive values indicate increasing irrigation; negative values indicate reducing it."
+                "For each device and soil level, the table below suggests whether to "
+                "add or remove water.  The recommended change (in litres per day) "
+                "is based on the difference between your targets and the observed "
+                "averages for moisture and tension."
             )
             st.dataframe(rec_df)
 
@@ -764,7 +730,6 @@ with tab_insights:
             device and sensor level.
             """
         )
-
         if summary_df.empty:
             st.info("No data to analyse for sensor issues.")
         else:
@@ -782,14 +747,11 @@ with tab_insights:
             if alerts:
                 for alert in alerts:
                     st.error(alert)
-                # In a production system you could send an email via SMTP or a
-                # notification service.  Here we simply display a note.
                 st.info(
                     "Alerts would be emailed to v.munaldilube@uu.nl for further action."
                 )
             else:
                 st.success("No sensor issues detected in the selected data range.")
-
 
 ###############################################################################
 # FOOTER
