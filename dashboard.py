@@ -1,8 +1,18 @@
 """
-Streamlit dashboard for NPEC Ecotrons with user-defined moisture targets
+Streamlit dashboard for NPEC Ecotrons with user‑defined moisture targets
 and automatically derived tension targets.  This version corrects the
 recommendation logic by treating higher tension as drier soil and
 clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa).
+
+This revised code also incorporates the actual lysimeter geometry and
+field‑capacity moisture targets.  The top and middle soil layers (0–0.3 m
+and 0.3–0.6 m) each hold about 59 L of soil, and the bottom layer
+(0.6–1.0 m) holds about 79 L.  Recommended water additions or removals
+are calculated as (target VWC – observed VWC)/100 × zone volume for
+each level, yielding litres of water to add (positive) or remove
+(negative).  Default moisture targets correspond to field capacity for
+potato roots: ~35 % in the upper clay layer, 30 % in the middle
+loam layer and 20 % in the lower sand layer.
 """
 
 import os
@@ -54,6 +64,24 @@ def ip_from(url: str) -> str:
 
 # Optional password for the sidebar
 SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))
+
+###############################################################################
+# NEW CONSTANTS FOR GEOMETRY AND TARGETS
+###############################################################################
+# Each lysimeter’s top and middle layers (~0.3 m) hold about 59 L of soil,
+# while the lower layer (~0.4 m) holds about 79 L.  These volumes are used
+# to calculate irrigation/suction recommendations in litres.
+ZONE_VOLUMES = [59.0, 59.0, 79.0]
+
+# Default volumetric water content targets (% VWC) corresponding to field
+# capacity for potatoes: clay (upper layer) ~35 %, loam (middle layer) ~30 %,
+# sand (lower layer) ~20 %.  These values are used as defaults when the user
+# does not specify their own targets.
+DEFAULT_MOISTURE_TARGETS = {
+    "SMT water content 1 (%)": 35.0,
+    "SMT water content 2 (%)": 30.0,
+    "SMT water content 3 (%)": 20.0,
+}
 
 ###############################################################################
 # DEVICE DIRECTORY (SIDEBAR DATA)
@@ -128,6 +156,7 @@ META = {
     "scorpion": ("Ecolab 3", "Basic"), "caterpillar": ("Ecolab 3", "Basic"),
     "potato beetle": ("Ecolab 3", "Basic"), "cricket": ("Ecolab 3", "Basic"),
 }
+
 def meta_for(name: str) -> Tuple[str, str]:
     return META.get(normalize_name(name), ("Ecolab 3", "Basic"))
 
@@ -587,24 +616,28 @@ with tab_insights:
             moisture content for each level below.  The dashboard derives tension
             targets automatically (using a linear fit and clamping them to the
             sensor’s valid range) and recommends whether to
-            add or remove water for each device and level.
+            add or remove water for each device and level.  Volumes are based on
+            the actual soil volumes at each depth (~59 L for 0–0.6 m and ~79 L for
+            0.6–1.0 m).
             """
         )
 
         if summary_df.empty:
             st.info("No data to analyse for moisture homogenisation.")
         else:
-            # Ask user for moisture targets; use medians as defaults
-            default_targets_moisture = {
-                m_col: round(summary_df[m_col].median(), 2)
-                for m_col in sorted(moisture_cols)
-            }
+            # Ask user for moisture targets; use default field-capacity targets if available
+            default_targets_moisture = {}
+            for i, m_col in enumerate(sorted(moisture_cols)):
+                default_targets_moisture[m_col] = DEFAULT_MOISTURE_TARGETS.get(
+                    m_col, round(summary_df[m_col].median(), 2)
+                )
+
             moisture_inputs = {}
             cols_m = st.columns(len(sorted(moisture_cols)))
             for i, m_col in enumerate(sorted(moisture_cols)):
                 with cols_m[i]:
                     moisture_inputs[m_col] = st.number_input(
-                        f"Level {i+1}",
+                        f"Level {i+1} target VWC (%)",
                         min_value=0.0,
                         max_value=100.0,
                         value=float(default_targets_moisture[m_col]),
@@ -645,30 +678,30 @@ with tab_insights:
             )
             st.plotly_chart(fig_tension, use_container_width=True)
 
-            # Compute irrigation recommendations: higher tension = drier soil
+            # Compute irrigation recommendations: calculate litres based on zone volumes
             recs = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
                 device_rec = {"device": device}
                 for i, m_col in enumerate(sorted(moisture_cols)):
-                    t_col = sorted(tension_cols)[i]
-                    moisture_diff = moisture_inputs[m_col] - row[m_col]
-                    tension_diff = row[t_col] - target_tension_values[t_col]
-                    # dryness_score > 0 means add water
-                    dryness_score = moisture_diff + tension_diff / 10.0
-                    action = "Add" if dryness_score > 0 else "Remove"
-                    change_litres = round(abs(dryness_score) * 0.05, 3)
+                    # Calculate difference between target and observed moisture (% VWC)
+                    moisture_diff_percent = moisture_inputs[m_col] - row[m_col]
+                    # Determine zone volume in litres for this level
+                    zone_vol = ZONE_VOLUMES[i] if i < len(ZONE_VOLUMES) else ZONE_VOLUMES[-1]
+                    # Convert percentage difference to litres (positive to add, negative to remove)
+                    change_litres = (moisture_diff_percent / 100.0) * zone_vol
+                    action = "Add" if change_litres > 0 else "Remove"
                     device_rec[f"Level {i+1} action"] = action
-                    device_rec[f"Level {i+1} change (L)"] = change_litres
+                    device_rec[f"Level {i+1} change (L)"] = round(abs(change_litres), 2)
                 recs.append(device_rec)
 
             rec_df = pd.DataFrame(recs)
-            st.write("### Irrigation recommendations")
+            st.write("### Irrigation/Suction recommendations")
             st.write(
-                "For each device and soil level, the table below suggests whether to "
-                "add or remove water.  The recommended change (in litres per day) "
-                "is based on the difference between your targets and the observed "
-                "averages for moisture and tension."
+                "For each device and soil depth, the table below shows whether to "
+                "add or remove water and the approximate litres needed to reach your target VWC. "
+                "These volumes are calculated from the difference between the target and observed "
+                "moisture content multiplied by the actual soil volume at each depth."
             )
             st.dataframe(rec_df)
 
