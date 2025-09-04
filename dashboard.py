@@ -6,16 +6,17 @@ additional “Insights” tab.  The Insights tab allows users to analyse
 moisture and tension data, set their own targets for each soil level, and
 receive irrigation recommendations or sensor fault warnings.
 
-The script loads logs from CSV files or ZIP archives, lets users downsample
-and filter the data by date, device and room, and plots time series for
-selected parameters.  In the Insights tab users can homogenise moisture and
-tension across devices or detect malfunctioning probes.
+In this version, the target tension values are automatically derived from
+the moisture targets using a simple linear regression between moisture and
+tension in the uploaded data.  This removes the need to guess appropriate
+tension values when setting moisture setpoints.
 """
 
 import os
 import re
 from typing import List, Tuple
 
+import numpy as np  # Added for computing tension targets
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -36,8 +37,6 @@ st.set_page_config(
 def normalize_name(name: str) -> str:
     """
     Normalize device/camera names so they match META keys.
-    This helper collapses whitespace and handles a few common aliases so that
-    lookups against the META mapping are robust.
     """
     s = name.strip().lower().replace("-", " ").replace("_", " ")
     fixes = {
@@ -57,7 +56,7 @@ def normalize_name(name: str) -> str:
     return fixes.get(s, s)
 
 def ip_from(url: str) -> str:
-    """Extract an IP (or host) from a URL.  If parsing fails the original string is returned."""
+    """Extract an IP (or host) from a URL."""
     try:
         return url.split("//", 1)[1].split("/", 1)[0]
     except Exception:
@@ -69,7 +68,6 @@ SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", "")
 ###############################################################################
 # DEVICE DIRECTORY (SIDEBAR DATA)
 ###############################################################################
-# List of Ecotron devices and their control UI endpoints.
 DEVICES: List[Tuple[str, str]] = [
     ("Ulysses", "http://192.168.162.8/visu/#/main"),
     ("Admiral", "http://192.168.162.9/visu/#/main"),
@@ -108,7 +106,6 @@ DEVICES: List[Tuple[str, str]] = [
     ("Potato beetle", "http://192.168.162.42/visu/#/main"),
     ("Cricket", "http://192.168.162.43/visu/#/main"),
 ]
-# Emoji mapping for cute icons next to each device.
 EMOJI = {
     "ulysses": "🦋", "admiral": "🦋", "scarab": "🪲", "ladybug": "🐞",
     "stag beetle": "🪲", "mosquito": "🦟", "flea": "🪳", "yellowjacket": "🐝",
@@ -121,7 +118,6 @@ EMOJI = {
     "scorpion": "🦂", "caterpillar": "🐛", "potato beetle": "🥔🪲",
     "cricket": "🦗",
 }
-# Room/type mapping for grouping devices in the sidebar.
 META = {
     "ulysses": ("Ecolab 1", "Advanced"), "admiral": ("Ecolab 1", "Advanced"),
     "scarab": ("Ecolab 1", "Advanced"), "ladybug": ("Ecolab 1", "Advanced"),
@@ -175,8 +171,6 @@ IP_CAMERAS = [
 ###############################################################################
 # SIDEBAR (with optional password lock)
 ###############################################################################
-# The sidebar lists all devices, RhizoCam units and IP cameras.  A password
-# lock can hide these menus to prevent casual browsing.
 if "sidebar_unlocked" not in st.session_state:
     st.session_state.sidebar_unlocked = (SIDEBAR_PASS == "")
 
@@ -296,7 +290,6 @@ st.markdown("---")
 ###############################################################################
 # ANALYTICS AND DATA LOADING
 ###############################################################################
-# Room assignment mapping used for default room grouping of CSV files.
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
     "Ladybug": "Room 1", "Yellowjacket": "Room 1", "Flea": "Room 1",
@@ -306,18 +299,10 @@ room_assignments = {
     "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
     "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2",
 }
-# Limit the maximum number of rows to load for performance reasons.
 MAX_ROWS = 50_000
 
 def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
-    """
-    Load multiple CSV files provided by the user.
-
-    Each CSV must use a semicolon (;) delimiter and begins with the device name
-    followed by an underscore.  The device name is extracted from the file
-    name and assigned to a new "device" column.  A "room" column is also
-    assigned using `room_assignments`.  Rows beyond `max_rows` are truncated.
-    """
+    """Load multiple CSV files provided by the user."""
     data_frames, total_rows = [], 0
     for uploaded_file in uploaded_files:
         try:
@@ -345,13 +330,7 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     return pd.concat(data_frames, ignore_index=True)
 
 def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
-    """
-    Load multiple CSV files from a ZIP archive.
-
-    The ZIP archive may contain files in subdirectories.  Only files ending
-    in `.csv` (and not starting with `__MACOSX/`) are processed.  Device
-    names are extracted as for `load_data`.
-    """
+    """Load multiple CSV files from a ZIP archive."""
     data_frames, total_rows = [], 0
     with zipfile.ZipFile(zip_file) as z:
         for filename in z.namelist():
@@ -382,13 +361,7 @@ def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     return pd.concat(data_frames, ignore_index=True)
 
 def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
-    """
-    Downsample the dataset using the specified frequency.
-
-    If `freq` is '10T' (the raw 10-minute interval), the data is returned
-    unchanged.  Otherwise the numeric columns are resampled using the mean,
-    grouped by device and room.
-    """
+    """Downsample the dataset using the specified frequency."""
     if freq == "10T":
         return df
     if "timestamp" not in df.columns:
@@ -404,10 +377,7 @@ def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else df
 
 def looks_like_data_point(col):
-    """
-    Heuristically determine if a column name is likely to represent a data
-    point (numeric), based on simple string checks.
-    """
+    """Heuristically determine if a column name is likely to represent a data point."""
     try:
         float(str(col))
         return True
@@ -427,21 +397,17 @@ st.title("Upload CSV or ZIP files")
 uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
 uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
 
-# Warn about large ZIP files
 if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
     st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
 
-# Load data from either multiple CSV files or a single ZIP archive.
 data = pd.DataFrame()
 if uploaded_files:
     data = load_data(uploaded_files)
 elif uploaded_zip:
     data = load_data_from_zip(uploaded_zip)
 else:
-    # No data uploaded yet; stop the app here.
     st.stop()
 
-# Convert timestamps from European format (DD.MM.YYYY HH:MM:SS).
 if data.empty:
     st.stop()
 try:
@@ -459,11 +425,9 @@ selected_freq = sampling_options[selected_freq_label]
 
 data = resample_data(data, selected_freq)
 
-# Interpolate numeric columns and forward/backfill to smooth missing data.
 numeric_cols = data.select_dtypes(include="number").columns
 data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
-# Reorder columns for consistency: device and room first, followed by others.
 columns_order = ["device", "room"] + [c for c in data.columns if c not in ["device", "room"]]
 data = data[columns_order]
 
@@ -485,15 +449,12 @@ selected_devices = st.multiselect("Select Devices", device_options, default="All
 if "All" in selected_devices:
     selected_devices = devices_list.tolist()
 
-# Identify columns that are not clearly data points; these represent metadata
-# or descriptive text and should not appear in the parameter selection list.
 all_columns = [
     c
     for c in data.columns
     if c not in ["timestamp", "device", "room"] and not looks_like_data_point(c)
 ]
 
-# Standard parameter lists used as shortcuts in the parameter picker.
 standard_parameters = [
     "Atmosphere temperature (°C)", "Atmosphere humidity (% RH)",
     "FRT tension 1 (kPa)", "FRT tension 2 (kPa)", "FRT tension 3 (kPa)",
@@ -519,7 +480,6 @@ except Exception as e:
     st.error(f"Error with date input: {e}")
     st.stop()
 
-# Filter data by room, device and date range.
 filtered_data = data[
     (data["room"].isin(selected_rooms))
     & (data["device"].isin(selected_devices))
@@ -527,7 +487,6 @@ filtered_data = data[
     & (data["timestamp"] <= pd.to_datetime(end_date))
 ]
 
-# If no data remains after filtering, stop early.
 if filtered_data.empty:
     st.write("No data available for the selected parameters and date range.")
     st.stop()
@@ -551,7 +510,6 @@ with tab_visuals:
         "Select Parameters", parameter_options
     )
 
-    # Expand the selection into an explicit list of columns to plot.
     final_parameters, seen = [], set()
     if "Standard Parameters" in selected_parameters:
         final_parameters += [p for p in standard_parameters if p in data.columns]
@@ -560,8 +518,6 @@ with tab_visuals:
     final_parameters += [p for p in selected_parameters if p not in ["Standard Parameters", "DCC project"]]
     final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
-    # Plot each selected parameter as a time series.  Separate lines are drawn
-    # for each selected device.
     if final_parameters and not filtered_data.empty:
         for parameter in final_parameters:
             fig = px.line()
@@ -578,7 +534,6 @@ with tab_visuals:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Display the first 100 rows of the filtered dataset for inspection.
         st.subheader("Raw Data")
         st.dataframe(filtered_data.head(100))
         if len(filtered_data) > 100:
@@ -599,7 +554,7 @@ with tab_insights:
         ],
     )
 
-    # Compute summary statistics up front to avoid redundant calculations.
+    # Compute summary statistics up front
     moisture_cols = [col for col in filtered_data.columns if col.startswith("SMT water content")]
     tension_cols = [col for col in filtered_data.columns if col.startswith("FRT tension")]
     summary_df = (
@@ -609,29 +564,26 @@ with tab_insights:
     )
 
     if insight_task == "Homogenize moisture content":
-        # Explain the objective and prompt for targets.
         st.markdown(
             """
             **Objective:** Bring soil moisture and tension levels across all devices
-            into consistent ranges at each sensor level.  Use the input fields
-            below to specify your desired target volumetric water content (VWC)
-            and tension for each level.  The dashboard will compare these
-            targets against the observed averages and suggest whether to add
-            or remove water for each device and level.
+            into consistent ranges at each sensor level. Use the sliders below
+            to specify your desired target volumetric water content (VWC) for
+            each level.  Target tensions are automatically derived from the
+            moisture targets using a linear fit between moisture and tension in
+            your data.  The dashboard will compare these targets against the
+            observed averages and suggest whether to add or remove water for
+            each device and level.
             """
         )
 
         if summary_df.empty:
             st.info("No data to analyse for moisture homogenisation.")
         else:
-            # Default targets from the median across devices.
+            # Compute default moisture targets from the median across devices
             default_targets_moisture = {
                 moisture_cols[i]: round(summary_df[moisture_cols[i]].median(), 2)
                 for i in range(len(moisture_cols))
-            }
-            default_targets_tension = {
-                tension_cols[i]: round(summary_df[tension_cols[i]].median(), 2)
-                for i in range(len(tension_cols))
             }
 
             st.write("### Set target moisture content (%VWC) for each level")
@@ -650,21 +602,28 @@ with tab_insights:
                         format="%.1f",
                     )
 
-            st.write("### Set target tension (kPa) for each level")
-            tension_inputs = {}
+            # Compute linear regression for tension vs. moisture at each level
             tension_cols_sorted = sorted(tension_cols)
-            cols_t = st.columns(len(tension_cols_sorted))
-            for i, col in enumerate(tension_cols_sorted):
-                with cols_t[i]:
-                    level = i + 1
-                    tension_inputs[col] = st.number_input(
-                        f"Level {level}",
-                        min_value=-200.0,
-                        max_value=200.0,
-                        value=float(default_targets_tension[col]),
-                        step=1.0,
-                        format="%.1f",
-                    )
+            tension_funcs = []
+            for i, m_col in enumerate(moisture_cols_sorted):
+                t_col = tension_cols_sorted[i]
+                x = filtered_data[m_col].astype(float)
+                y = filtered_data[t_col].astype(float)
+                if len(x) > 1 and x.std() > 0:
+                    slope, intercept = np.polyfit(x, y, 1)
+                else:
+                    # Fallback: approximate slope and intercept
+                    slope, intercept = -2.0, summary_df[t_col].median()
+                tension_funcs.append((slope, intercept))
+
+            # Derive and display target tension values from the moisture inputs
+            st.write("### Derived target tension (kPa) based on moisture targets")
+            target_tension_values = {}
+            for i, (slope, intercept) in enumerate(tension_funcs):
+                m_col = moisture_cols_sorted[i]
+                predicted_tension = intercept + slope * moisture_inputs[m_col]
+                target_tension_values[tension_cols_sorted[i]] = predicted_tension
+                st.write(f"Level {i+1}: {predicted_tension:.1f} kPa")
 
             st.write("### Average moisture and tension per device")
             # Plot moisture averages
@@ -691,7 +650,7 @@ with tab_insights:
             )
             st.plotly_chart(fig_tension, use_container_width=True)
 
-            # Compute irrigation recommendations based on user-defined targets.
+            # Compute irrigation recommendations
             recs = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
@@ -700,9 +659,9 @@ with tab_insights:
                     t_col = tension_cols_sorted[i]
                     # Differences to targets
                     moisture_diff = moisture_inputs[m_col] - row[m_col]
-                    tension_diff = tension_inputs[t_col] - row[t_col]
-                    # Combine differences into a dryness score.  Positive means too dry,
-                    # negative means too wet.  The tension difference is scaled.
+                    predicted_tension = target_tension_values[t_col]
+                    tension_diff = predicted_tension - row[t_col]
+                    # Combine differences: positive dryness_score means too dry
                     dryness_score = moisture_diff + tension_diff / 10.0
                     action = "Add" if dryness_score > 0 else "Remove"
                     recommended_change = round(dryness_score * 0.05, 3)
