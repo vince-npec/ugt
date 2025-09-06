@@ -14,7 +14,6 @@ downsample data.  The Insights tab allows setting target moisture
 levels, deriving corresponding tension targets via a linear fit, and
 generating irrigation/suction recommendations per device and soil
 layer.
-
 """
 
 import os
@@ -464,7 +463,7 @@ def derive_tension_targets(
     For each pair of moisture and tension columns (assumed sorted by level),
     fit a linear regression of tension versus moisture and evaluate the
     regression at the desired moisture target.  Clamp the result to the
-    physical range [-100, 1500] kPa【360095573979625†L754-L771】.
+    physical range [-100, 1500] kPa.
     """
     targets = {}
     for i, m_col in enumerate(sorted(moisture_cols)):
@@ -691,6 +690,7 @@ with tab_insights:
             Current values showed below represent the current averages across all devices. 
             For the current experiment the aimed values should be: ≈35 % VWC in clay 
             (Level 1), ≈30 % in loam (Level 2) and ≈20 % in sand (Level 3).
+            
             """
         )
 
