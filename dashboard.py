@@ -14,6 +14,7 @@ downsample data.  The Insights tab allows setting target moisture
 levels, deriving corresponding tension targets via a linear fit, and
 generating irrigation/suction recommendations per device and soil
 layer.
+
 """
 
 import os
