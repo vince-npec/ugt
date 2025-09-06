@@ -2,7 +2,7 @@
 Streamlit dashboard for NPEC Ecotrons with user-defined moisture targets
 and automatically derived tension targets.  This version corrects the
 recommendation logic by treating higher tension as drier soil and
-clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa【360095573979625†L754-L771】).
+clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa).
 
 The dashboard consists of two tabs:
     - **Visualizations**: Standard time-series plots for selected sensors.
@@ -685,8 +685,11 @@ with tab_insights:
             into consistent ranges at each sensor level.  Specify your desired
             moisture content for each level below.  The dashboard derives tension
             targets automatically (using a linear fit and clamping them to the
-            sensor’s valid range【360095573979625†L754-L771】) and recommends whether to
+            sensor’s valid range) and recommends whether to
             add or remove water for each device and level.
+            Current values showed below represent the current averages across all devices. 
+            For the current experiment the aimed values should be: ≈35 % VWC in clay 
+            (Level 1), ≈30 % in loam (Level 2) and ≈20 % in sand (Level 3).
             """
         )
 
