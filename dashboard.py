@@ -4,16 +4,12 @@ and automatically derived tension targets.  This version corrects the
 recommendation logic by treating higher tension as drier soil and
 clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa).
 
-The dashboard consists of two tabs:
-    - **Visualizations**: Standard time-series plots for selected sensors.
-    - **Insights**: Tools to homogenize moisture content across devices or detect sensor issues.
-
-Users can upload multiple CSV files or a ZIP archive of CSVs, select
-devices, rooms, parameters and date ranges, and choose whether to
-downsample data.  The Insights tab allows setting target moisture
-levels, deriving corresponding tension targets via a linear fit, and
-generating irrigation/suction recommendations per device and soil
-layer.
+This modified version removes the restrictive 50 000‑row cap when loading
+data and defaults to hourly downsampling to ensure the full data set can
+be visualised without overwhelming the Streamlit process.  Apart from
+these two changes—raising the `MAX_ROWS` constant and setting the
+downsampling select box’s default to “Hourly”—the rest of the dashboard
+logic remains untouched.
 """
 
 import os
@@ -342,8 +338,9 @@ room_assignments = {
 
 # Maximum number of rows to load from uploaded files.  This prevents the
 # dashboard from freezing or running out of memory when very large logs are
-# uploaded.
-MAX_ROWS = 50_000
+# uploaded.  **Raised from 50 000 to 200 000** so that the full 60‑day
+# experiment can be loaded when downsampling to hourly by default.
+MAX_ROWS = 200_000
 
 
 def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
@@ -367,11 +364,11 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
             df["device"] = device_name
             df["room"] = room_assignments.get(device_name, "Unknown")
             if not df.empty:
-                if total_rows + len(df) > max_rows:
+                if max_rows and total_rows + len(df) > max_rows:
                     df = df.iloc[: max_rows - total_rows]
                 data_frames.append(df)
                 total_rows += len(df)
-                if total_rows >= max_rows:
+                if max_rows and total_rows >= max_rows:
                     st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
                     break
         except Exception as e:
@@ -404,11 +401,11 @@ def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
                         df["device"] = device_name
                         df["room"] = room_assignments.get(device_name, "Unknown")
                         if not df.empty:
-                            if total_rows + len(df) > max_rows:
+                            if max_rows and total_rows + len(df) > max_rows:
                                 df = df.iloc[: max_rows - total_rows]
                             data_frames.append(df)
                             total_rows += len(df)
-                            if total_rows >= max_rows:
+                            if max_rows and total_rows >= max_rows:
                                 st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
                                 break
                     except Exception as e:
@@ -480,7 +477,6 @@ def derive_tension_targets(
         targets[t_col] = predicted
     return targets
 
-
 ###############################################################################
 # MAIN APPLICATION
 ###############################################################################
@@ -525,8 +521,12 @@ sampling_options = {
     "Hourly": "1H",
     "Daily": "1D",
 }
+freq_labels = list(sampling_options.keys())
+# Default to hourly downsampling.  We compute the index dynamically to avoid
+# hard‑coding the position should the order of keys ever change.
+default_index = freq_labels.index("Hourly") if "Hourly" in freq_labels else 0
 selected_freq_label = st.selectbox(
-    "Select Data Frequency (downsampling)", list(sampling_options.keys()), index=0
+    "Select Data Frequency (downsampling)", freq_labels, index=default_index
 )
 selected_freq = sampling_options[selected_freq_label]
 
