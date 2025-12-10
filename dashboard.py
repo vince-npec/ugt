@@ -26,7 +26,6 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sklearn.linear_model import LinearRegression
 
 ###############################################################################
 # PAGE CONFIG
@@ -489,8 +488,16 @@ def derive_tension_targets(
 ###############################################################################
 def build_seasonal_models(
     df: pd.DataFrame, humidity_cols: List[str], temperature_cols: List[str]
-) -> Dict[str, Dict[str, LinearRegression]]:
+) -> Dict[str, Dict[str, np.ndarray]]:
     """Fit sinusoidal regression models for humidity and temperature for each room.
+
+    This function computes least‑squares coefficients directly using NumPy,
+    avoiding external dependencies like scikit‑learn.  For each room the
+    relationship between the target variable and the day of year is
+    approximated with a linear combination of sine and cosine terms plus
+    an intercept:
+
+        y ≈ β₁ · sin(2π · doy/365) + β₂ · cos(2π · doy/365) + β₀
 
     Parameters
     ----------
@@ -506,40 +513,47 @@ def build_seasonal_models(
     -------
     dict
         A mapping of room to another mapping of target name ("humidity",
-        "temperature") to a fitted LinearRegression model.
+        "temperature") to a NumPy array of coefficients ``[β₁, β₂, β₀]``.  If
+        a particular target is not present for a given room, that key is
+        omitted.
     """
     df = df.copy()
     df["dayofyear"] = df["timestamp"].dt.dayofyear
     df["sin"] = np.sin(2 * np.pi * df["dayofyear"] / 365.0)
     df["cos"] = np.cos(2 * np.pi * df["dayofyear"] / 365.0)
-    models: Dict[str, Dict[str, LinearRegression]] = {}
+    models: Dict[str, Dict[str, np.ndarray]] = {}
     for room, g in df.groupby("room"):
         models[room] = {}
+        # Build design matrix with sine, cosine and intercept
+        X_base = g[["sin", "cos"]].values
+        X_design = np.hstack([X_base, np.ones((len(X_base), 1))])
         if humidity_cols:
-            y_h = g[humidity_cols].astype(float).mean(axis=1)
-            X = g[["sin", "cos"]].values
-            m = LinearRegression()
-            m.fit(X, y_h)
-            models[room]["humidity"] = m
+            y_h = g[humidity_cols].astype(float).mean(axis=1).values
+            if len(y_h) > 0:
+                coeffs_h, *_ = np.linalg.lstsq(X_design, y_h, rcond=None)
+                models[room]["humidity"] = coeffs_h
         if temperature_cols:
-            y_t = g[temperature_cols].astype(float).mean(axis=1)
-            X = g[["sin", "cos"]].values
-            m = LinearRegression()
-            m.fit(X, y_t)
-            models[room]["temperature"] = m
+            y_t = g[temperature_cols].astype(float).mean(axis=1).values
+            if len(y_t) > 0:
+                coeffs_t, *_ = np.linalg.lstsq(X_design, y_t, rcond=None)
+                models[room]["temperature"] = coeffs_t
     return models
 
 
 def predict_for_room(
-    room: str, date: pd.Timestamp, models: Dict[str, Dict[str, LinearRegression]]
+    room: str, date: pd.Timestamp, models: Dict[str, Dict[str, np.ndarray]]
 ) -> DTuple[float, float]:
-    """Predict humidity and temperature for a given room and date using the models.
+    """Predict humidity and temperature for a given room and date using the fitted models.
+
+    The ``models`` dictionary stores coefficient vectors ``[β₁, β₂, β₀]``
+    for each target.  The prediction is computed as ``β₁·sin + β₂·cos + β₀``
+    where ``sin`` and ``cos`` are evaluated at the given day of the year.
 
     Returns
     -------
     tuple(float, float)
         Predicted humidity (% RH) and temperature (°C).  If a model is
-        unavailable, NaN is returned for that target.
+        unavailable, ``NaN`` is returned for that target.
     """
     dayofyear = date.dayofyear
     sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
@@ -548,13 +562,15 @@ def predict_for_room(
     temperature_pred = float("nan")
     if room in models:
         if "humidity" in models[room]:
-            humidity_pred = models[room]["humidity"].predict([[sin_val, cos_val]])[0]
+            coeffs_h = models[room]["humidity"]
+            humidity_pred = coeffs_h[0] * sin_val + coeffs_h[1] * cos_val + coeffs_h[2]
         if "temperature" in models[room]:
-            temperature_pred = models[room]["temperature"].predict([[sin_val, cos_val]])[0]
+            coeffs_t = models[room]["temperature"]
+            temperature_pred = coeffs_t[0] * sin_val + coeffs_t[1] * cos_val + coeffs_t[2]
     return humidity_pred, temperature_pred
 
 
-def get_predictions_over_year(room: str, models: Dict[str, Dict[str, LinearRegression]]) -> pd.DataFrame:
+def get_predictions_over_year(room: str, models: Dict[str, Dict[str, np.ndarray]]) -> pd.DataFrame:
     """Return a DataFrame containing predicted humidity and temperature for each day of the year for the given room."""
     days = np.arange(1, 366)
     sin_vals = np.sin(2 * np.pi * days / 365.0)
@@ -562,9 +578,11 @@ def get_predictions_over_year(room: str, models: Dict[str, Dict[str, LinearRegre
     preds: Dict[str, List[float]] = {"dayofyear": days}
     if room in models:
         if "humidity" in models[room]:
-            preds["humidity"] = models[room]["humidity"].predict(np.column_stack([sin_vals, cos_vals]))
+            coeffs_h = models[room]["humidity"]
+            preds["humidity"] = coeffs_h[0] * sin_vals + coeffs_h[1] * cos_vals + coeffs_h[2]
         if "temperature" in models[room]:
-            preds["temperature"] = models[room]["temperature"].predict(np.column_stack([sin_vals, cos_vals]))
+            coeffs_t = models[room]["temperature"]
+            preds["temperature"] = coeffs_t[0] * sin_vals + coeffs_t[1] * cos_vals + coeffs_t[2]
     return pd.DataFrame(preds)
 
 
@@ -638,7 +656,7 @@ data = data[columns_order]
 lowercase_cols = {c.lower(): c for c in data.columns}
 humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
 temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
-models: Dict[str, Dict[str, LinearRegression]] = {}
+models: Dict[str, Dict[str, np.ndarray]] = {}
 if humidity_cols_model or temperature_cols_model:
     models = build_seasonal_models(data, humidity_cols_model, temperature_cols_model)
 
