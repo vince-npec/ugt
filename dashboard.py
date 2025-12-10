@@ -541,48 +541,112 @@ def build_seasonal_models(
 
 
 def predict_for_room(
-    room: str, date: pd.Timestamp, models: Dict[str, Dict[str, np.ndarray]]
+    room: str,
+    date: pd.Timestamp,
+    models: Dict[str, Dict[str, np.ndarray]],
+    seasonal_avgs: Dict[str, pd.DataFrame],
 ) -> DTuple[float, float]:
-    """Predict humidity and temperature for a given room and date using the fitted models.
+    """Predict humidity and temperature for a given room and date.
 
-    The ``models`` dictionary stores coefficient vectors ``[β₁, β₂, β₀]``
-    for each target.  The prediction is computed as ``β₁·sin + β₂·cos + β₀``
-    where ``sin`` and ``cos`` are evaluated at the given day of the year.
+    The prediction is based on seasonal averages if available; if the
+    corresponding day of year exists in ``seasonal_avgs``, we return the
+    averaged humidity and temperature for that day.  When the seasonal
+    averages dictionary does not contain a value for the requested room
+    or day, we fall back to the sinusoidal regression models contained in
+    ``models``.  This fallback ensures that predictions are always
+    available, even for days not observed in the data.
+
+    Parameters
+    ----------
+    room : str
+        The room identifier for which to predict.
+    date : pd.Timestamp
+        The date for prediction.  Only the day‑of‑year component matters
+        because both seasonal averages and the sinusoidal model depend on
+        day of year.
+    models : dict
+        Dictionary mapping room to fitted coefficients for sinusoidal models.
+    seasonal_avgs : dict
+        Dictionary mapping room to DataFrame of per‑day averages.  The
+        DataFrame index represents the day of year and contains columns
+        ``hum_avg`` and/or ``temp_avg``.
 
     Returns
     -------
     tuple(float, float)
-        Predicted humidity (% RH) and temperature (°C).  If a model is
-        unavailable, ``NaN`` is returned for that target.
+        Predicted humidity (% RH) and temperature (°C).  If a target is
+        unavailable from both sources, ``NaN`` is returned.
     """
     dayofyear = date.dayofyear
-    sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
-    cos_val = np.cos(2 * np.pi * dayofyear / 365.0)
     humidity_pred = float("nan")
     temperature_pred = float("nan")
-    if room in models:
-        if "humidity" in models[room]:
+    # Try seasonal averages first
+    if room in seasonal_avgs:
+        daily_stats = seasonal_avgs[room]
+        if dayofyear in daily_stats.index:
+            if "hum_avg" in daily_stats.columns:
+                humidity_pred = float(daily_stats.loc[dayofyear, "hum_avg"])
+            if "temp_avg" in daily_stats.columns:
+                temperature_pred = float(daily_stats.loc[dayofyear, "temp_avg"])
+    # If missing values remain, fall back to sinusoidal model
+    if (np.isnan(humidity_pred) or np.isnan(temperature_pred)) and room in models:
+        sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
+        cos_val = np.cos(2 * np.pi * dayofyear / 365.0)
+        if np.isnan(humidity_pred) and "humidity" in models[room]:
             coeffs_h = models[room]["humidity"]
             humidity_pred = coeffs_h[0] * sin_val + coeffs_h[1] * cos_val + coeffs_h[2]
-        if "temperature" in models[room]:
+        if np.isnan(temperature_pred) and "temperature" in models[room]:
             coeffs_t = models[room]["temperature"]
             temperature_pred = coeffs_t[0] * sin_val + coeffs_t[1] * cos_val + coeffs_t[2]
     return humidity_pred, temperature_pred
 
 
-def get_predictions_over_year(room: str, models: Dict[str, Dict[str, np.ndarray]]) -> pd.DataFrame:
-    """Return a DataFrame containing predicted humidity and temperature for each day of the year for the given room."""
+def get_predictions_over_year(
+    room: str,
+    models: Dict[str, Dict[str, np.ndarray]],
+    seasonal_avgs: Dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Return predicted humidity and temperature for each day of the year for the given room.
+
+    The predictions use seasonal averages where available.  For days not present
+    in the seasonal averages or when averages are missing for a variable,
+    the function falls back to the sinusoidal model.
+
+    Parameters
+    ----------
+    room : str
+        Room identifier.
+    models : dict
+        Sinusoidal model coefficients as returned by ``build_seasonal_models``.
+    seasonal_avgs : dict
+        Seasonal averages per room and day of year.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with ``dayofyear`` as the index and columns ``humidity``
+        and/or ``temperature`` containing the predicted values.
+    """
     days = np.arange(1, 366)
+    preds: Dict[str, List[float]] = {"dayofyear": days}
+    # Precompute sinusoidal terms for fallback
     sin_vals = np.sin(2 * np.pi * days / 365.0)
     cos_vals = np.cos(2 * np.pi * days / 365.0)
-    preds: Dict[str, List[float]] = {"dayofyear": days}
-    if room in models:
-        if "humidity" in models[room]:
-            coeffs_h = models[room]["humidity"]
-            preds["humidity"] = coeffs_h[0] * sin_vals + coeffs_h[1] * cos_vals + coeffs_h[2]
-        if "temperature" in models[room]:
-            coeffs_t = models[room]["temperature"]
-            preds["temperature"] = coeffs_t[0] * sin_vals + coeffs_t[1] * cos_vals + coeffs_t[2]
+    for var in ["humidity", "temperature"]:
+        preds[var] = []
+    for idx, doy in enumerate(days):
+        # Use seasonal average if available
+        use_avg = room in seasonal_avgs and doy in seasonal_avgs[room].index
+        for var in ["humidity", "temperature"]:
+            val = float("nan")
+            if use_avg:
+                col = "hum_avg" if var == "humidity" else "temp_avg"
+                if col in seasonal_avgs[room].columns:
+                    val = float(seasonal_avgs[room].loc[doy, col])
+            if np.isnan(val) and room in models and var in models[room]:
+                coeffs = models[room][var]
+                val = coeffs[0] * sin_vals[idx] + coeffs[1] * cos_vals[idx] + coeffs[2]
+            preds[var].append(val)
     return pd.DataFrame(preds)
 
 
@@ -650,15 +714,52 @@ columns_order = ["device", "room"] + [c for c in data.columns if c not in ["devi
 data = data[columns_order]
 
 ###############################################################################
-# PREPARE CLIMATE MODELS
+# PREPARE CLIMATE MODELS AND SEASONAL AVERAGES
 ###############################################################################
 # Identify humidity and temperature columns for modelling
 lowercase_cols = {c.lower(): c for c in data.columns}
 humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
 temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+
+# Fit sinusoidal regression models (sine/cosine) for each room.  These are used
+# as a fallback when seasonal averages are unavailable or when extrapolating to
+# days of year not present in the historical data.  The models dictionary
+# maps room names to coefficient arrays for humidity and temperature.
 models: Dict[str, Dict[str, np.ndarray]] = {}
 if humidity_cols_model or temperature_cols_model:
     models = build_seasonal_models(data, humidity_cols_model, temperature_cols_model)
+
+# Compute seasonal averages per day of year for each room.  For each record
+# we calculate the mean humidity and temperature across their respective
+# sensor columns, then average these values across all available years at
+# each day of the year.  The resulting `seasonal_avgs` dictionary maps
+# room names to DataFrames indexed by day of year with columns
+# `hum_avg` and/or `temp_avg`.  These averages provide realistic
+# predictions that remain within the observed range for that room.
+seasonal_avgs: Dict[str, pd.DataFrame] = {}
+if humidity_cols_model or temperature_cols_model:
+    tmp_data = data.copy()
+    tmp_data["dayofyear"] = tmp_data["timestamp"].dt.dayofyear
+    # Compute per‑row averages for humidity and temperature, if columns exist
+    if humidity_cols_model:
+        tmp_data["hum_avg"] = tmp_data[humidity_cols_model].astype(float).mean(axis=1)
+    if temperature_cols_model:
+        tmp_data["temp_avg"] = tmp_data[temperature_cols_model].astype(float).mean(axis=1)
+    # Group by room and day of year to compute seasonal averages
+    for room, group in tmp_data.groupby("room"):
+        cols = []
+        if humidity_cols_model:
+            cols.append("hum_avg")
+        if temperature_cols_model:
+            cols.append("temp_avg")
+        # Compute the mean for each day of year across all years
+        daily_stats = group.groupby("dayofyear")[cols].mean().copy()
+        # Ensure that the index covers all days 1..365 for easier lookup; fill
+        # missing days by interpolation and forward/backward fill.
+        full_index = pd.RangeIndex(1, 366)
+        daily_stats = daily_stats.reindex(full_index)
+        daily_stats = daily_stats.interpolate().ffill().bfill()
+        seasonal_avgs[room] = daily_stats
 
 ###############################################################################
 # FILTER SELECTIONS FOR ROOMS, DEVICES AND PARAMETERS
@@ -964,15 +1065,20 @@ with tab_climate:
         # Choose room for prediction
         available_rooms = sorted(models.keys())
         selected_room_pred = st.selectbox("Select room for prediction", available_rooms)
-        # Date input for prediction using full data range
+        # Date input for prediction.  Allow any date beyond the available data to
+        # enable future predictions by not specifying a maximum date.
         min_date = data["timestamp"].min().date()
-        max_date = data["timestamp"].max().date()
         date_input_pred = st.date_input(
-            "Date for prediction", value=min_date, min_value=min_date, max_value=max_date
+            "Date for prediction",
+            value=min_date,
+            min_value=min_date,
+            # max_value intentionally omitted to permit arbitrary future dates
         )
         if selected_room_pred and date_input_pred:
             date_ts = pd.Timestamp(date_input_pred)
-            humidity_pred, temperature_pred = predict_for_room(selected_room_pred, date_ts, models)
+            humidity_pred, temperature_pred = predict_for_room(
+                selected_room_pred, date_ts, models, seasonal_avgs
+            )
             st.metric(
                 label=f"Predicted humidity (% RH) in {selected_room_pred}",
                 value=f"{humidity_pred:.2f}"
@@ -982,7 +1088,9 @@ with tab_climate:
                 value=f"{temperature_pred:.2f}"
             )
             # Plot predicted annual cycle for the room
-            yearly_preds = get_predictions_over_year(selected_room_pred, models)
+            yearly_preds = get_predictions_over_year(
+                selected_room_pred, models, seasonal_avgs
+            )
             if not yearly_preds.empty:
                 melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
                 fig_pred = px.line(
