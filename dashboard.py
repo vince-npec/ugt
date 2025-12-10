@@ -76,8 +76,15 @@ def ip_from(url: str) -> str:
 
 # Optional password for unlocking the sidebar.  This can be configured via
 # Streamlit secrets or environment variables.  When set, the sidebar menu
-# requires a password to view devices and cameras.
-SIDEBAR_PASS = st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))
+# requires a password to view devices and cameras.  If no secret or
+# environment variable is provided, fall back to the historical default
+# password "NPEC2025!" to preserve previous behaviour.  Note that hard‑coding
+# passwords in code reduces security; it is recommended to define
+# ``SIDEBAR_PASS`` in your secrets or environment variables when deploying.
+SIDEBAR_PASS = st.secrets.get(
+    "SIDEBAR_PASS",
+    os.environ.get("SIDEBAR_PASS", "NPEC2025!")
+)
 
 ###############################################################################
 # DEVICE DIRECTORY (SIDEBAR DATA)
@@ -1075,114 +1082,100 @@ with tab_climate:
             "and 'temperature' in their names."
         )
     else:
-        # Choose room for prediction
+        # Allow selection of one or more rooms for prediction.  Default to all available rooms.
         available_rooms = sorted(models.keys())
-        selected_room_pred = st.selectbox("Select room for prediction", available_rooms)
-        # Date input for prediction.  Allow any date beyond the available data to
-        # enable future predictions by not specifying a maximum date.
-        min_date = data["timestamp"].min().date()
-        date_input_pred = st.date_input(
-            "Date for prediction",
-            value=min_date,
-            min_value=min_date,
-            # max_value intentionally omitted to permit arbitrary future dates
+        selected_rooms_pred = st.multiselect(
+            "Select room(s) for prediction", available_rooms, default=available_rooms
         )
-        if selected_room_pred and date_input_pred:
-            # Convert selected date to timestamp for prediction
-            date_ts = pd.Timestamp(date_input_pred)
-            humidity_pred, temperature_pred = predict_for_room(
-                selected_room_pred, date_ts, models, seasonal_avgs
-            )
-            # Display point predictions
-            st.metric(
-                label=f"Predicted humidity (% RH) in {selected_room_pred}",
-                value=f"{humidity_pred:.2f}"
-            )
-            st.metric(
-                label=f"Predicted temperature (°C) in {selected_room_pred}",
-                value=f"{temperature_pred:.2f}"
-            )
-            # Allow user to specify a date range for focusing the prediction graph
-            # Default to the selected date for both start and end
-            exp_start_date = st.date_input(
-                "Experiment range start date",
-                value=date_input_pred,
-                key="exp_start_date",
-                min_value=min_date,
-            )
-            exp_end_date = st.date_input(
-                "Experiment range end date",
-                value=date_input_pred,
-                key="exp_end_date",
-                min_value=min_date,
-            )
+        # Provide start and end dates for the experiment range.  The range applies to all selected rooms.
+        min_date = data["timestamp"].min().date()
+        # Default range: current date for both start and end
+        default_start = min_date
+        default_end = min_date
+        exp_start_date = st.date_input(
+            "Experiment range start date",
+            value=default_start,
+            key="exp_start_date",
+            min_value=min_date,
+        )
+        exp_end_date = st.date_input(
+            "Experiment range end date",
+            value=default_end,
+            key="exp_end_date",
+            min_value=min_date,
+        )
+        # If any rooms are selected and valid dates are provided, compute predictions for the range
+        if selected_rooms_pred:
             # Compute day-of-year range based on the selected experiment dates
             try:
                 start_doy = exp_start_date.timetuple().tm_yday
                 end_doy = exp_end_date.timetuple().tm_yday
             except Exception:
-                start_doy = date_ts.dayofyear
-                end_doy = date_ts.dayofyear
-            # Generate yearly predictions
-            yearly_preds = get_predictions_over_year(
-                selected_room_pred, models, seasonal_avgs
-            )
+                start_doy = 1
+                end_doy = 1
             # Determine which days of year fall within the selected range
             if start_doy <= end_doy:
                 selected_doys = list(range(start_doy, end_doy + 1))
             else:
                 # Handle wrap-around across the end of the year
                 selected_doys = list(range(start_doy, 366)) + list(range(1, end_doy + 1))
-            yearly_preds_range = yearly_preds[yearly_preds["dayofyear"].isin(selected_doys)].copy()
-            # Compute prediction ranges within the selected date range
-            hum_range = None
-            temp_range = None
-            if "humidity" in yearly_preds_range.columns and not yearly_preds_range.empty:
-                hum_min = yearly_preds_range["humidity"].min()
-                hum_max = yearly_preds_range["humidity"].max()
-                hum_range = (hum_min, hum_max)
-            if "temperature" in yearly_preds_range.columns and not yearly_preds_range.empty:
-                temp_min = yearly_preds_range["temperature"].min()
-                temp_max = yearly_preds_range["temperature"].max()
-                temp_range = (temp_min, temp_max)
-            # Display range metrics for the selected date range
-            cols_range = st.columns(2)
-            if hum_range is not None:
-                cols_range[0].metric(
-                    label=f"Predicted humidity range (% RH) in {selected_room_pred}",
-                    value=f"{hum_range[0]:.2f} – {hum_range[1]:.2f}"
-                )
-            if temp_range is not None:
-                cols_range[1].metric(
-                    label=f"Predicted temperature range (°C) in {selected_room_pred}",
-                    value=f"{temp_range[0]:.2f} – {temp_range[1]:.2f}"
-                )
-            # Plot the predicted annual cycle limited to the selected range
-            if not yearly_preds_range.empty:
-                melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds_range.columns]
-                fig_pred = px.line(
-                    yearly_preds_range.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
-                    x="dayofyear", y="Value", color="Variable",
-                    title=f"Predicted climate for {selected_room_pred} (day {start_doy} to {end_doy})"
-                )
-                fig_pred.update_layout(xaxis_title="Day of Year", yaxis_title="Predicted value")
-                st.plotly_chart(fig_pred, use_container_width=True)
+            # Prepare structures to collect prediction ranges and plot data
+            range_rows = []
+            plot_rows = []
+            for room in selected_rooms_pred:
+                # Generate yearly predictions for the room
+                yearly_preds = get_predictions_over_year(room, models, seasonal_avgs)
+                # Filter by selected DOYs
+                yearly_preds_range = yearly_preds[yearly_preds["dayofyear"].isin(selected_doys)].copy()
+                # Compute ranges for humidity and temperature
+                hum_range = None
+                temp_range = None
+                if "humidity" in yearly_preds_range.columns and not yearly_preds_range.empty:
+                    hum_min = yearly_preds_range["humidity"].min()
+                    hum_max = yearly_preds_range["humidity"].max()
+                    hum_range = (hum_min, hum_max)
+                if "temperature" in yearly_preds_range.columns and not yearly_preds_range.empty:
+                    temp_min = yearly_preds_range["temperature"].min()
+                    temp_max = yearly_preds_range["temperature"].max()
+                    temp_range = (temp_min, temp_max)
+                # Store ranges for display
+                range_rows.append({
+                    "Room": room,
+                    "Humidity Range (% RH)": f"{hum_range[0]:.2f} – {hum_range[1]:.2f}" if hum_range is not None else "N/A",
+                    "Temperature Range (°C)": f"{temp_range[0]:.2f} – {temp_range[1]:.2f}" if temp_range is not None else "N/A",
+                })
+                # Prepare data for plotting
+                if not yearly_preds_range.empty:
+                    # For each variable, append to plot_rows
+                    for var in ["humidity", "temperature"]:
+                        if var in yearly_preds_range.columns:
+                            df_var = yearly_preds_range[["dayofyear", var]].copy().rename(columns={var: "Value"})
+                            df_var["Variable"] = var
+                            df_var["Room"] = room
+                            plot_rows.append(df_var)
+            # Display the range table
+            if range_rows:
+                range_df = pd.DataFrame(range_rows)
+                st.subheader("Predicted ranges for selected rooms")
+                st.dataframe(range_df)
+            # Plot predictions for all selected rooms and variables
+            if plot_rows:
+                plot_df = pd.concat(plot_rows, ignore_index=True)
+                # Plot humidity and temperature separately for clarity
+                for var in ["humidity", "temperature"]:
+                    df_var = plot_df[plot_df["Variable"] == var]
+                    if not df_var.empty:
+                        fig = px.line(
+                            df_var,
+                            x="dayofyear",
+                            y="Value",
+                            color="Room",
+                            title=f"Predicted {var} for selected rooms (day {start_doy} to {end_doy})",
+                        )
+                        fig.update_layout(xaxis_title="Day of Year", yaxis_title=f"Predicted {var}")
+                        st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No predicted values available for the selected range.")
-            # Show historical observations on the selected date
-            hist = data[(data["room"] == selected_room_pred)].copy()
-            hist["date"] = hist["timestamp"].dt.date
-            same_day = hist[hist["date"] == date_input_pred]
-            if not same_day.empty:
-                st.subheader("Historical observations on this date")
-                cols_to_show: List[str] = []
-                if humidity_cols_model:
-                    cols_to_show += humidity_cols_model
-                if temperature_cols_model:
-                    cols_to_show += temperature_cols_model
-                st.dataframe(same_day[["timestamp"] + cols_to_show])
-            else:
-                st.info("No historical observations on this date for the selected room.")
+                st.info("No predicted values available for the selected range and rooms.")
             # Disclaimer regarding prediction accuracy
             st.caption(
                 "\n*Note: The climate model was trained on historical data where many rooms were not running at full "
