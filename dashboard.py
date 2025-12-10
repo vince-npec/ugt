@@ -1,26 +1,32 @@
 """
-Streamlit dashboard for NPEC Ecotrons with user-defined moisture targets
-and automatically derived tension targets.  This version corrects the
-recommendation logic by treating higher tension as drier soil and
-clamping predicted tensions to the sensor’s valid range (–100 to +1500 kPa).
+Extended Streamlit dashboard for NPEC Ecotrons.
 
-This modified version removes the restrictive 50 000‑row cap when loading
-data and defaults to hourly downsampling to ensure the full data set can
-be visualised without overwhelming the Streamlit process.  Apart from
-these two changes—raising the `MAX_ROWS` constant and setting the
-downsampling select box’s default to “Hourly”—the rest of the dashboard
-logic remains untouched.
+This file is based on the original NPEC Ecotron visualization dashboard and
+adds a new insights task for climate prediction.  The new task builds
+sinusoidal regression models for humidity and temperature in each room using
+historical sensor data.  Users can select a room and a date to obtain
+predicted climate conditions, and visualise the modelled annual cycle.  The
+idea of modelling seasonal climate variations with sine and cosine functions
+is well established in climatology: sinusoidal terms capture the annual
+cycle in temperature and humidity【316970089103360†L979-L984】.
+
+The remainder of the dashboard remains unchanged: users can upload data,
+downsample it, view time series plots, homogenise moisture levels and detect
+sensor issues.  The climate prediction feature automatically identifies
+columns containing the words "humidity" and "temperature" to build the
+models, so it works with a variety of sensor naming conventions.
 """
 
 import os
 import re
 import zipfile
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Tuple as DTuple
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sklearn.linear_model import LinearRegression
 
 ###############################################################################
 # PAGE CONFIG
@@ -477,6 +483,91 @@ def derive_tension_targets(
         targets[t_col] = predicted
     return targets
 
+
+###############################################################################
+# CLIMATE MODELLING FUNCTIONS
+###############################################################################
+def build_seasonal_models(
+    df: pd.DataFrame, humidity_cols: List[str], temperature_cols: List[str]
+) -> Dict[str, Dict[str, LinearRegression]]:
+    """Fit sinusoidal regression models for humidity and temperature for each room.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing ``timestamp`` and ``room`` columns along with
+        sensor readings.
+    humidity_cols : list of str
+        Column names representing humidity measurements.
+    temperature_cols : list of str
+        Column names representing temperature measurements.
+
+    Returns
+    -------
+    dict
+        A mapping of room to another mapping of target name ("humidity",
+        "temperature") to a fitted LinearRegression model.
+    """
+    df = df.copy()
+    df["dayofyear"] = df["timestamp"].dt.dayofyear
+    df["sin"] = np.sin(2 * np.pi * df["dayofyear"] / 365.0)
+    df["cos"] = np.cos(2 * np.pi * df["dayofyear"] / 365.0)
+    models: Dict[str, Dict[str, LinearRegression]] = {}
+    for room, g in df.groupby("room"):
+        models[room] = {}
+        if humidity_cols:
+            y_h = g[humidity_cols].astype(float).mean(axis=1)
+            X = g[["sin", "cos"]].values
+            m = LinearRegression()
+            m.fit(X, y_h)
+            models[room]["humidity"] = m
+        if temperature_cols:
+            y_t = g[temperature_cols].astype(float).mean(axis=1)
+            X = g[["sin", "cos"]].values
+            m = LinearRegression()
+            m.fit(X, y_t)
+            models[room]["temperature"] = m
+    return models
+
+
+def predict_for_room(
+    room: str, date: pd.Timestamp, models: Dict[str, Dict[str, LinearRegression]]
+) -> DTuple[float, float]:
+    """Predict humidity and temperature for a given room and date using the models.
+
+    Returns
+    -------
+    tuple(float, float)
+        Predicted humidity (% RH) and temperature (°C).  If a model is
+        unavailable, NaN is returned for that target.
+    """
+    dayofyear = date.dayofyear
+    sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
+    cos_val = np.cos(2 * np.pi * dayofyear / 365.0)
+    humidity_pred = float("nan")
+    temperature_pred = float("nan")
+    if room in models:
+        if "humidity" in models[room]:
+            humidity_pred = models[room]["humidity"].predict([[sin_val, cos_val]])[0]
+        if "temperature" in models[room]:
+            temperature_pred = models[room]["temperature"].predict([[sin_val, cos_val]])[0]
+    return humidity_pred, temperature_pred
+
+
+def get_predictions_over_year(room: str, models: Dict[str, Dict[str, LinearRegression]]) -> pd.DataFrame:
+    """Return a DataFrame containing predicted humidity and temperature for each day of the year for the given room."""
+    days = np.arange(1, 366)
+    sin_vals = np.sin(2 * np.pi * days / 365.0)
+    cos_vals = np.cos(2 * np.pi * days / 365.0)
+    preds: Dict[str, List[float]] = {"dayofyear": days}
+    if room in models:
+        if "humidity" in models[room]:
+            preds["humidity"] = models[room]["humidity"].predict(np.column_stack([sin_vals, cos_vals]))
+        if "temperature" in models[room]:
+            preds["temperature"] = models[room]["temperature"].predict(np.column_stack([sin_vals, cos_vals]))
+    return pd.DataFrame(preds)
+
+
 ###############################################################################
 # MAIN APPLICATION
 ###############################################################################
@@ -539,6 +630,17 @@ data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 # Reorder columns: device and room at the front
 columns_order = ["device", "room"] + [c for c in data.columns if c not in ["device", "room"]]
 data = data[columns_order]
+
+###############################################################################
+# PREPARE CLIMATE MODELS
+###############################################################################
+# Identify humidity and temperature columns for modelling
+lowercase_cols = {c.lower(): c for c in data.columns}
+humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
+temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+models: Dict[str, Dict[str, LinearRegression]] = {}
+if humidity_cols_model or temperature_cols_model:
+    models = build_seasonal_models(data, humidity_cols_model, temperature_cols_model)
 
 ###############################################################################
 # FILTER SELECTIONS FOR ROOMS, DEVICES AND PARAMETERS
@@ -664,9 +766,10 @@ with tab_visuals:
 ###############################################################################
 with tab_insights:
     st.subheader("Insights")
+    # Extend insights tasks with climate predictions
     insight_task = st.selectbox(
         "Select an insights task",
-        ["Homogenize moisture content", "Detect sensor issues"],
+        ["Homogenize moisture content", "Detect sensor issues", "Climate predictions"],
     )
 
     # Prepare summary statistics for moisture and tension
@@ -817,6 +920,63 @@ with tab_insights:
                 )
             else:
                 st.success("No sensor issues detected in the selected data range.")
+
+    elif insight_task == "Climate predictions":
+        st.markdown(
+            """
+            **Objective:** Use historical data to model and predict atmospheric humidity and temperature.
+            This feature fits a sinusoidal model (sine and cosine terms) for each room using the day of
+            the year as the predictor【316970089103360†L979-L984】.  Select a room and a date below to view the predicted
+            humidity and temperature for that day, and explore the predicted annual cycle.  Historical
+            observations for the selected date are also shown when available.
+            """
+        )
+        if not models:
+            st.warning(
+                "Climate models are unavailable. Ensure that your data contains columns with 'humidity' "
+                "and 'temperature' in their names."
+            )
+        else:
+            # Choose room for prediction
+            available_rooms = sorted(models.keys())
+            selected_room_pred = st.selectbox("Select room for prediction", available_rooms)
+            # Date input for prediction
+            # Use the global data range rather than filtered_data to allow predictions outside selected range
+            min_date = data["timestamp"].min().date()
+            max_date = data["timestamp"].max().date()
+            date_input_pred = st.date_input(
+                "Date for prediction", value=min_date, min_value=min_date, max_value=max_date
+            )
+            if selected_room_pred and date_input_pred:
+                date_ts = pd.Timestamp(date_input_pred)
+                humidity_pred, temperature_pred = predict_for_room(selected_room_pred, date_ts, models)
+                st.metric(label=f"Predicted humidity (% RH) in {selected_room_pred}", value=f"{humidity_pred:.2f}")
+                st.metric(label=f"Predicted temperature (°C) in {selected_room_pred}", value=f"{temperature_pred:.2f}")
+                # Plot predicted annual cycle for the room
+                yearly_preds = get_predictions_over_year(selected_room_pred, models)
+                if not yearly_preds.empty:
+                    melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
+                    fig_pred = px.line(
+                        yearly_preds.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
+                        x="dayofyear", y="Value", color="Variable",
+                        title=f"Predicted annual cycle for {selected_room_pred}"
+                    )
+                    fig_pred.update_layout(xaxis_title="Day of Year", yaxis_title="Predicted value")
+                    st.plotly_chart(fig_pred, use_container_width=True)
+                # Show historical observations on the selected date
+                hist = data[(data["room"] == selected_room_pred)].copy()
+                hist["date"] = hist["timestamp"].dt.date
+                same_day = hist[hist["date"] == date_input_pred]
+                if not same_day.empty:
+                    st.subheader("Historical observations on this date")
+                    cols_to_show: List[str] = []
+                    if humidity_cols_model:
+                        cols_to_show += humidity_cols_model
+                    if temperature_cols_model:
+                        cols_to_show += temperature_cols_model
+                    st.dataframe(same_day[["timestamp"] + cols_to_show])
+                else:
+                    st.info("No historical observations on this date for the selected room.")
 
 ###############################################################################
 # FOOTER
