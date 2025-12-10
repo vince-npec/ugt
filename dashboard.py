@@ -716,10 +716,23 @@ data = data[columns_order]
 ###############################################################################
 # PREPARE CLIMATE MODELS AND SEASONAL AVERAGES
 ###############################################################################
-# Identify humidity and temperature columns for modelling
+# Identify humidity and temperature columns for modelling.
+# For climate predictions we prefer to use atmosphere sensors (ambient conditions)
+# rather than soil moisture or soil temperature sensors.  We therefore
+# prioritise columns containing both "humidity" and "atmosphere" (case insensitive)
+# or both "temperature" and "atmosphere".  If such columns are absent,
+# we fall back to any column containing "humidity" or "temperature".
 lowercase_cols = {c.lower(): c for c in data.columns}
-humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
-temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+atmos_humidity_cols = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c and "atmosphere" in c]
+atmos_temperature_cols = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c and "atmosphere" in c]
+if atmos_humidity_cols:
+    humidity_cols_model = atmos_humidity_cols
+else:
+    humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
+if atmos_temperature_cols:
+    temperature_cols_model = atmos_temperature_cols
+else:
+    temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
 
 # Fit sinusoidal regression models (sine/cosine) for each room.  These are used
 # as a fallback when seasonal averages are unavailable or when extrapolating to
@@ -1091,6 +1104,29 @@ with tab_climate:
             yearly_preds = get_predictions_over_year(
                 selected_room_pred, models, seasonal_avgs
             )
+            # Calculate prediction ranges (min and max) for humidity and temperature over the year
+            hum_range = None
+            temp_range = None
+            if "humidity" in yearly_preds.columns:
+                hum_min = yearly_preds["humidity"].min()
+                hum_max = yearly_preds["humidity"].max()
+                hum_range = (hum_min, hum_max)
+            if "temperature" in yearly_preds.columns:
+                temp_min = yearly_preds["temperature"].min()
+                temp_max = yearly_preds["temperature"].max()
+                temp_range = (temp_min, temp_max)
+            # Display range metrics if available
+            cols_range = st.columns(2)
+            if hum_range is not None:
+                cols_range[0].metric(
+                    label=f"Predicted humidity range (% RH) in {selected_room_pred}",
+                    value=f"{hum_range[0]:.2f} – {hum_range[1]:.2f}"
+                )
+            if temp_range is not None:
+                cols_range[1].metric(
+                    label=f"Predicted temperature range (°C) in {selected_room_pred}",
+                    value=f"{temp_range[0]:.2f} – {temp_range[1]:.2f}"
+                )
             if not yearly_preds.empty:
                 melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
                 fig_pred = px.line(
@@ -1114,6 +1150,12 @@ with tab_climate:
                 st.dataframe(same_day[["timestamp"] + cols_to_show])
             else:
                 st.info("No historical observations on this date for the selected room.")
+            # Disclaimer regarding prediction accuracy
+            st.caption(
+                "\n*Note: The climate model was trained on historical data where many rooms were not running at full "
+                "power simultaneously. Predictions may therefore deviate from actual conditions when multiple "
+                "rooms are active concurrently. Use the predicted ranges as guidance rather than exact forecasts.*"
+            )
 
 ###############################################################################
 # FOOTER
