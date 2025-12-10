@@ -724,8 +724,8 @@ if filtered_data.empty:
 ###############################################################################
 # TAB SETUP
 ###############################################################################
-# Create two tabs: Visualizations and Insights
-tab_visuals, tab_insights = st.tabs(["Visualizations", "Insights"])
+# Create three tabs: Visualizations, Insights and Climate predictions
+tab_visuals, tab_insights, tab_climate = st.tabs(["Visualizations", "Insights", "Climate predictions"])
 
 ###############################################################################
 # TAB 1: VISUALISATIONS
@@ -784,10 +784,10 @@ with tab_visuals:
 ###############################################################################
 with tab_insights:
     st.subheader("Insights")
-    # Extend insights tasks with climate predictions
+    # Insights tasks (climate predictions moved to its own tab)
     insight_task = st.selectbox(
         "Select an insights task",
-        ["Homogenize moisture content", "Detect sensor issues", "Climate predictions"],
+        ["Homogenize moisture content", "Detect sensor issues"],
     )
 
     # Prepare summary statistics for moisture and tension
@@ -939,62 +939,73 @@ with tab_insights:
             else:
                 st.success("No sensor issues detected in the selected data range.")
 
-    elif insight_task == "Climate predictions":
-        st.markdown(
-            """
-            **Objective:** Use historical data to model and predict atmospheric humidity and temperature.
-            This feature fits a sinusoidal model (sine and cosine terms) for each room using the day of
-            the year as the predictor【316970089103360†L979-L984】.  Select a room and a date below to view the predicted
-            humidity and temperature for that day, and explore the predicted annual cycle.  Historical
-            observations for the selected date are also shown when available.
-            """
+    # remove climate predictions from insights: handled in separate tab
+
+###############################################################################
+# TAB 3: CLIMATE PREDICTIONS
+###############################################################################
+with tab_climate:
+    st.subheader("Climate predictions")
+    st.markdown(
+        """
+        **Objective:** Use historical data to model and predict atmospheric humidity and temperature.
+        This feature fits a sinusoidal model (sine and cosine terms) for each room using the day of
+        the year as the predictor【316970089103360†L979-L984】.  Select a room and a date below to view the predicted
+        humidity and temperature for that day, and explore the predicted annual cycle.  Historical
+        observations for the selected date are also shown when available.
+        """
+    )
+    if not models:
+        st.warning(
+            "Climate models are unavailable. Ensure that your data contains columns with 'humidity' "
+            "and 'temperature' in their names."
         )
-        if not models:
-            st.warning(
-                "Climate models are unavailable. Ensure that your data contains columns with 'humidity' "
-                "and 'temperature' in their names."
+    else:
+        # Choose room for prediction
+        available_rooms = sorted(models.keys())
+        selected_room_pred = st.selectbox("Select room for prediction", available_rooms)
+        # Date input for prediction using full data range
+        min_date = data["timestamp"].min().date()
+        max_date = data["timestamp"].max().date()
+        date_input_pred = st.date_input(
+            "Date for prediction", value=min_date, min_value=min_date, max_value=max_date
+        )
+        if selected_room_pred and date_input_pred:
+            date_ts = pd.Timestamp(date_input_pred)
+            humidity_pred, temperature_pred = predict_for_room(selected_room_pred, date_ts, models)
+            st.metric(
+                label=f"Predicted humidity (% RH) in {selected_room_pred}",
+                value=f"{humidity_pred:.2f}"
             )
-        else:
-            # Choose room for prediction
-            available_rooms = sorted(models.keys())
-            selected_room_pred = st.selectbox("Select room for prediction", available_rooms)
-            # Date input for prediction
-            # Use the global data range rather than filtered_data to allow predictions outside selected range
-            min_date = data["timestamp"].min().date()
-            max_date = data["timestamp"].max().date()
-            date_input_pred = st.date_input(
-                "Date for prediction", value=min_date, min_value=min_date, max_value=max_date
+            st.metric(
+                label=f"Predicted temperature (°C) in {selected_room_pred}",
+                value=f"{temperature_pred:.2f}"
             )
-            if selected_room_pred and date_input_pred:
-                date_ts = pd.Timestamp(date_input_pred)
-                humidity_pred, temperature_pred = predict_for_room(selected_room_pred, date_ts, models)
-                st.metric(label=f"Predicted humidity (% RH) in {selected_room_pred}", value=f"{humidity_pred:.2f}")
-                st.metric(label=f"Predicted temperature (°C) in {selected_room_pred}", value=f"{temperature_pred:.2f}")
-                # Plot predicted annual cycle for the room
-                yearly_preds = get_predictions_over_year(selected_room_pred, models)
-                if not yearly_preds.empty:
-                    melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
-                    fig_pred = px.line(
-                        yearly_preds.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
-                        x="dayofyear", y="Value", color="Variable",
-                        title=f"Predicted annual cycle for {selected_room_pred}"
-                    )
-                    fig_pred.update_layout(xaxis_title="Day of Year", yaxis_title="Predicted value")
-                    st.plotly_chart(fig_pred, use_container_width=True)
-                # Show historical observations on the selected date
-                hist = data[(data["room"] == selected_room_pred)].copy()
-                hist["date"] = hist["timestamp"].dt.date
-                same_day = hist[hist["date"] == date_input_pred]
-                if not same_day.empty:
-                    st.subheader("Historical observations on this date")
-                    cols_to_show: List[str] = []
-                    if humidity_cols_model:
-                        cols_to_show += humidity_cols_model
-                    if temperature_cols_model:
-                        cols_to_show += temperature_cols_model
-                    st.dataframe(same_day[["timestamp"] + cols_to_show])
-                else:
-                    st.info("No historical observations on this date for the selected room.")
+            # Plot predicted annual cycle for the room
+            yearly_preds = get_predictions_over_year(selected_room_pred, models)
+            if not yearly_preds.empty:
+                melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
+                fig_pred = px.line(
+                    yearly_preds.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
+                    x="dayofyear", y="Value", color="Variable",
+                    title=f"Predicted annual cycle for {selected_room_pred}"
+                )
+                fig_pred.update_layout(xaxis_title="Day of Year", yaxis_title="Predicted value")
+                st.plotly_chart(fig_pred, use_container_width=True)
+            # Show historical observations on the selected date
+            hist = data[(data["room"] == selected_room_pred)].copy()
+            hist["date"] = hist["timestamp"].dt.date
+            same_day = hist[hist["date"] == date_input_pred]
+            if not same_day.empty:
+                st.subheader("Historical observations on this date")
+                cols_to_show: List[str] = []
+                if humidity_cols_model:
+                    cols_to_show += humidity_cols_model
+                if temperature_cols_model:
+                    cols_to_show += temperature_cols_model
+                st.dataframe(same_day[["timestamp"] + cols_to_show])
+            else:
+                st.info("No historical observations on this date for the selected room.")
 
 ###############################################################################
 # FOOTER
