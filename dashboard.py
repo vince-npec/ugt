@@ -1088,10 +1088,12 @@ with tab_climate:
             # max_value intentionally omitted to permit arbitrary future dates
         )
         if selected_room_pred and date_input_pred:
+            # Convert selected date to timestamp for prediction
             date_ts = pd.Timestamp(date_input_pred)
             humidity_pred, temperature_pred = predict_for_room(
                 selected_room_pred, date_ts, models, seasonal_avgs
             )
+            # Display point predictions
             st.metric(
                 label=f"Predicted humidity (% RH) in {selected_room_pred}",
                 value=f"{humidity_pred:.2f}"
@@ -1100,22 +1102,50 @@ with tab_climate:
                 label=f"Predicted temperature (°C) in {selected_room_pred}",
                 value=f"{temperature_pred:.2f}"
             )
-            # Plot predicted annual cycle for the room
+            # Allow user to specify a date range for focusing the prediction graph
+            # Default to the selected date for both start and end
+            exp_start_date = st.date_input(
+                "Experiment range start date",
+                value=date_input_pred,
+                key="exp_start_date",
+                min_value=min_date,
+            )
+            exp_end_date = st.date_input(
+                "Experiment range end date",
+                value=date_input_pred,
+                key="exp_end_date",
+                min_value=min_date,
+            )
+            # Compute day-of-year range based on the selected experiment dates
+            try:
+                start_doy = exp_start_date.timetuple().tm_yday
+                end_doy = exp_end_date.timetuple().tm_yday
+            except Exception:
+                start_doy = date_ts.dayofyear
+                end_doy = date_ts.dayofyear
+            # Generate yearly predictions
             yearly_preds = get_predictions_over_year(
                 selected_room_pred, models, seasonal_avgs
             )
-            # Calculate prediction ranges (min and max) for humidity and temperature over the year
+            # Determine which days of year fall within the selected range
+            if start_doy <= end_doy:
+                selected_doys = list(range(start_doy, end_doy + 1))
+            else:
+                # Handle wrap-around across the end of the year
+                selected_doys = list(range(start_doy, 366)) + list(range(1, end_doy + 1))
+            yearly_preds_range = yearly_preds[yearly_preds["dayofyear"].isin(selected_doys)].copy()
+            # Compute prediction ranges within the selected date range
             hum_range = None
             temp_range = None
-            if "humidity" in yearly_preds.columns:
-                hum_min = yearly_preds["humidity"].min()
-                hum_max = yearly_preds["humidity"].max()
+            if "humidity" in yearly_preds_range.columns and not yearly_preds_range.empty:
+                hum_min = yearly_preds_range["humidity"].min()
+                hum_max = yearly_preds_range["humidity"].max()
                 hum_range = (hum_min, hum_max)
-            if "temperature" in yearly_preds.columns:
-                temp_min = yearly_preds["temperature"].min()
-                temp_max = yearly_preds["temperature"].max()
+            if "temperature" in yearly_preds_range.columns and not yearly_preds_range.empty:
+                temp_min = yearly_preds_range["temperature"].min()
+                temp_max = yearly_preds_range["temperature"].max()
                 temp_range = (temp_min, temp_max)
-            # Display range metrics if available
+            # Display range metrics for the selected date range
             cols_range = st.columns(2)
             if hum_range is not None:
                 cols_range[0].metric(
@@ -1127,15 +1157,18 @@ with tab_climate:
                     label=f"Predicted temperature range (°C) in {selected_room_pred}",
                     value=f"{temp_range[0]:.2f} – {temp_range[1]:.2f}"
                 )
-            if not yearly_preds.empty:
-                melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds.columns]
+            # Plot the predicted annual cycle limited to the selected range
+            if not yearly_preds_range.empty:
+                melt_cols = [c for c in ["humidity", "temperature"] if c in yearly_preds_range.columns]
                 fig_pred = px.line(
-                    yearly_preds.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
+                    yearly_preds_range.melt(id_vars=["dayofyear"], value_vars=melt_cols, var_name="Variable", value_name="Value"),
                     x="dayofyear", y="Value", color="Variable",
-                    title=f"Predicted annual cycle for {selected_room_pred}"
+                    title=f"Predicted climate for {selected_room_pred} (day {start_doy} to {end_doy})"
                 )
                 fig_pred.update_layout(xaxis_title="Day of Year", yaxis_title="Predicted value")
                 st.plotly_chart(fig_pred, use_container_width=True)
+            else:
+                st.info("No predicted values available for the selected range.")
             # Show historical observations on the selected date
             hist = data[(data["room"] == selected_room_pred)].copy()
             hist["date"] = hist["timestamp"].dt.date
