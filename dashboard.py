@@ -1,3 +1,21 @@
+"""Extended Streamlit dashboard for NPEC Ecotrons.
+
+This file is based on the original NPEC Ecotron visualization dashboard and
+adds a new insights task for climate prediction.  The new task builds
+sinusoidal regression models for humidity and temperature in each room using
+historical sensor data.  Users can select a room and a date to obtain
+predicted climate conditions, and visualise the modelled annual cycle.  The
+idea of modelling seasonal climate variations with sine and cosine functions
+is well established in climatology: sinusoidal terms capture the annual
+cycle in temperature and humidity【316970089103360†L979-L984】.
+
+The remainder of the dashboard remains unchanged: users can upload data,
+downsample it, view time series plots, homogenise moisture levels and detect
+sensor issues.  The climate prediction feature automatically identifies
+columns containing the words "humidity" and "temperature" to build the
+models, so it works with a variety of sensor naming conventions.
+"""
+
 """
 Extended Streamlit dashboard for NPEC Ecotrons.
 
@@ -6,8 +24,10 @@ adds a new insights task for climate prediction.
 
 SECURITY NOTE
 -------------
-A sidebar password can optionally lock the device/camera menu. The password
-MUST NOT be hardcoded. Provide it via:
+A sidebar password can optionally lock ONLY the sidebar device/camera menu.
+The main dashboard content must always remain visible.
+
+Provide the password via:
 - Streamlit secrets: st.secrets["SIDEBAR_PASS"]
 - Environment variable: SIDEBAR_PASS
 
@@ -17,7 +37,7 @@ If no password is provided, the sidebar menu is unlocked by default.
 import os
 import re
 import zipfile
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -185,7 +205,7 @@ IP_CAMERAS = [
 ]
 
 ###############################################################################
-# SIDEBAR WITH OPTIONAL PASSWORD LOCK
+# SIDEBAR WITH OPTIONAL PASSWORD LOCK (LOCKS ONLY SIDEBAR CONTENT)
 ###############################################################################
 if "sidebar_unlocked" not in st.session_state:
     st.session_state.sidebar_unlocked = (SIDEBAR_PASS == "")
@@ -193,91 +213,99 @@ if "sidebar_unlocked" not in st.session_state:
 with st.sidebar:
     st.title("Devices")
 
+    # If no password configured, ensure unlocked and show note
     if SIDEBAR_PASS == "":
-        st.info("Sidebar lock is disabled (no SIDEBAR_PASS set).")
+        st.session_state.sidebar_unlocked = True
+        st.caption("Sidebar lock disabled (no SIDEBAR_PASS set).")
 
+    # Lock/unlock controls
     cols = st.columns([1, 1, 1.2])
     with cols[2]:
-        if st.session_state.sidebar_unlocked:
-            if st.button("Lock menu", use_container_width=True, disabled=(SIDEBAR_PASS == "")):
-                st.session_state.sidebar_unlocked = False
-                st.rerun()
-        elif SIDEBAR_PASS:
-            with st.popover("Unlock"):
-                pw = st.text_input("Password", type="password", placeholder="••••••")
-                if st.button("Unlock"):
-                    if pw == SIDEBAR_PASS:
-                        st.session_state.sidebar_unlocked = True
-                        st.rerun()
-                    else:
-                        st.error("Wrong password")
+        if SIDEBAR_PASS:
+            if st.session_state.sidebar_unlocked:
+                if st.button("Lock menu", use_container_width=True):
+                    st.session_state.sidebar_unlocked = False
+                    st.rerun()
+            else:
+                with st.popover("Unlock"):
+                    pw = st.text_input("Password", type="password", placeholder="••••••")
+                    if st.button("Unlock"):
+                        if pw == SIDEBAR_PASS:
+                            st.session_state.sidebar_unlocked = True
+                            st.rerun()
+                        else:
+                            st.error("Wrong password")
 
-    if not st.session_state.sidebar_unlocked and SIDEBAR_PASS:
-        st.caption("Menu locked. Click **Unlock** to enter the password.")
-        st.stop()  # hide everything else in sidebar when locked
+    # If locked: show message ONLY; do NOT stop the app (main content stays visible)
+    if SIDEBAR_PASS and not st.session_state.sidebar_unlocked:
+        st.info("Menu locked. Click **Unlock** to access device/camera controls.")
+    else:
+        # Filter inputs for device and camera lists
+        q = st.text_input("Filter by name or IP", value="")
+        room_filter = st.selectbox("Room", ["All", "Ecolab 1", "Ecolab 2", "Ecolab 3"], index=0)
+        rooms_order = ["Ecolab 1", "Ecolab 2", "Ecolab 3"] if room_filter == "All" else [room_filter]
 
-    q = st.text_input("Filter by name or IP", value="")
-    room_filter = st.selectbox("Room", ["All", "Ecolab 1", "Ecolab 2", "Ecolab 3"], index=0)
-    rooms_order = ["Ecolab 1", "Ecolab 2", "Ecolab 3"] if room_filter == "All" else [room_filter]
+        # List devices grouped by room
+        for room_name in rooms_order:
+            with st.expander(room_name, expanded=False):
+                for name, url in DEVICES:
+                    room, typ = meta_for(name)
+                    if room != room_name:
+                        continue
+                    if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
+                        continue
+                    key = normalize_name(name)
+                    emoji = EMOJI.get(key, "🔗")
+                    st.markdown(
+                        f"**{emoji} {name}**  \n"
+                        f"`{ip_from(url)}` • *{typ}*  \n"
+                        f"[Open ↗]({url})",
+                        help=f"{room} • {typ}",
+                    )
 
-    for room_name in rooms_order:
-        with st.expander(room_name, expanded=False):
-            for name, url in DEVICES:
-                room, typ = meta_for(name)
-                if room != room_name:
-                    continue
-                if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
-                    continue
-                key = normalize_name(name)
-                emoji = EMOJI.get(key, "🔗")
-                st.markdown(
-                    f"**{emoji} {name}**  \n"
-                    f"`{ip_from(url)}` • *{typ}*  \n"
-                    f"[Open ↗]({url})",
-                    help=f"{room} • {typ}",
-                )
+        # RhizoCams grouped by room
+        st.markdown("---")
+        st.subheader("RhizoCam units")
+        for room_name in rooms_order:
+            items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
+            if not items:
+                continue
+            with st.expander(room_name, expanded=False):
+                for rc in items:
+                    host = rc["host"]
+                    g_ip, a_ip = ip_from(rc["gantry"]), ip_from(rc["analysis"])
+                    if q and all(q.lower() not in s.lower() for s in (host, g_ip, a_ip)):
+                        continue
+                    st.markdown(
+                        f"**📷 RhizoCam @ {host}**  \n"
+                        f"`Gantry:` `{g_ip}`  \n"
+                        f"`Analysis:` `{a_ip}`  \n"
+                        f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
+                    )
 
-    st.markdown("---")
-    st.subheader("RhizoCam units")
-    for room_name in rooms_order:
-        items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
-        if not items:
-            continue
-        with st.expander(room_name, expanded=False):
-            for rc in items:
-                host = rc["host"]
-                g_ip, a_ip = ip_from(rc["gantry"]), ip_from(rc["analysis"])
-                if q and all(q.lower() not in s.lower() for s in (host, g_ip, a_ip)):
-                    continue
-                st.markdown(
-                    f"**📷 RhizoCam @ {host}**  \n"
-                    f"`Gantry:` `{g_ip}`  \n"
-                    f"`Analysis:` `{a_ip}`  \n"
-                    f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
-                )
+        # IP cameras grouped by room
+        st.markdown("---")
+        st.subheader("IP cameras")
+        cams_by_room = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
+        for cam_name, ip in IP_CAMERAS:
+            room, _ = meta_for(cam_name)
+            cams_by_room[room].append((cam_name, ip))
 
-    st.markdown("---")
-    st.subheader("IP cameras")
-    cams_by_room: Dict[str, List[Tuple[str, str]]] = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
-    for cam_name, ip in IP_CAMERAS:
-        room, _ = meta_for(cam_name)
-        cams_by_room[room].append((cam_name, ip))
+        for room_name in rooms_order:
+            with st.expander(room_name, expanded=False):
+                for cam_name, ip in cams_by_room.get(room_name, []):
+                    if q and (q.lower() not in cam_name.lower() and q.lower() not in ip.lower()):
+                        continue
+                    key = normalize_name(cam_name)
+                    emoji = EMOJI.get(key, "🎥")
+                    url = f"http://{ip}"
+                    st.markdown(
+                        f"**{emoji} {cam_name}**  \n"
+                        f"`{ip}`  \n"
+                        f"[Open ↗]({url})"
+                    )
 
-    for room_name in rooms_order:
-        with st.expander(room_name, expanded=False):
-            for cam_name, ip in cams_by_room.get(room_name, []):
-                if q and (q.lower() not in cam_name.lower() and q.lower() not in ip.lower()):
-                    continue
-                key = normalize_name(cam_name)
-                emoji = EMOJI.get(key, "🎥")
-                url = f"http://{ip}"
-                st.markdown(
-                    f"**{emoji} {cam_name}**  \n"
-                    f"`{ip}`  \n"
-                    f"[Open ↗]({url})"
-                )
-
-    st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
+        st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
 ###############################################################################
 # HEADER WITH LOGOS AND TITLE
@@ -359,8 +387,6 @@ def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
             with z.open(filename) as f:
                 try:
                     df = pd.read_csv(f, delimiter=";")
-                    # If nested folders exist, keep same heuristic:
-                    # "<folder>/<device>_something.csv" OR "<device>_something.csv"
                     base = filename.split("/")[-1]
                     device_prefix = base.split("_")[0]
                     device_name = _normalize_device_from_filename(device_prefix)
@@ -436,7 +462,9 @@ def derive_tension_targets(
         if mask.sum() > 1:
             slope, intercept = np.polyfit(x[mask], y[mask], 1)
         else:
-            slope, intercept = -2.0, float(np.nanmedian(y.values)) if np.isfinite(np.nanmedian(y.values)) else 0.0
+            slope = -2.0
+            med = np.nanmedian(y.values)
+            intercept = float(med) if np.isfinite(med) else 0.0
 
         predicted = intercept + slope * float(moisture_targets.get(m_col, 0.0))
         predicted = float(max(-100.0, min(1500.0, predicted)))
@@ -481,44 +509,8 @@ def build_seasonal_models(
                 coeffs_t, *_ = np.linalg.lstsq(X_design, y_t, rcond=None)
                 models[room]["temperature"] = coeffs_t
 
-    # Remove empty rooms
     models = {k: v for k, v in models.items() if v}
     return models
-
-
-def predict_for_room(
-    room: str,
-    date: pd.Timestamp,
-    models: Dict[str, Dict[str, np.ndarray]],
-    seasonal_avgs: Dict[str, pd.DataFrame],
-) -> Tuple[float, float]:
-    """Predict humidity and temperature for a given room and date."""
-    dayofyear = int(date.dayofyear)
-
-    humidity_pred = float("nan")
-    temperature_pred = float("nan")
-
-    if room in seasonal_avgs:
-        daily_stats = seasonal_avgs[room]
-        if dayofyear in daily_stats.index:
-            if "hum_avg" in daily_stats.columns:
-                humidity_pred = float(daily_stats.loc[dayofyear, "hum_avg"])
-            if "temp_avg" in daily_stats.columns:
-                temperature_pred = float(daily_stats.loc[dayofyear, "temp_avg"])
-
-    if (np.isnan(humidity_pred) or np.isnan(temperature_pred)) and room in models:
-        sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
-        cos_val = np.cos(2 * np.pi * dayofyear / 365.0)
-
-        if np.isnan(humidity_pred) and "humidity" in models[room]:
-            coeffs_h = models[room]["humidity"]
-            humidity_pred = float(coeffs_h[0] * sin_val + coeffs_h[1] * cos_val + coeffs_h[2])
-
-        if np.isnan(temperature_pred) and "temperature" in models[room]:
-            coeffs_t = models[room]["temperature"]
-            temperature_pred = float(coeffs_t[0] * sin_val + coeffs_t[1] * cos_val + coeffs_t[2])
-
-    return humidity_pred, temperature_pred
 
 
 def get_predictions_over_year(
@@ -617,8 +609,16 @@ lowercase_cols = {c.lower(): c for c in data.columns}
 atmos_humidity_cols = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c and "atmosphere" in c]
 atmos_temperature_cols = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c and "atmosphere" in c]
 
-humidity_cols_model = atmos_humidity_cols if atmos_humidity_cols else [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
-temperature_cols_model = atmos_temperature_cols if atmos_temperature_cols else [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+humidity_cols_model = (
+    atmos_humidity_cols
+    if atmos_humidity_cols
+    else [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
+)
+temperature_cols_model = (
+    atmos_temperature_cols
+    if atmos_temperature_cols
+    else [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+)
 
 models: Dict[str, Dict[str, np.ndarray]] = {}
 if humidity_cols_model or temperature_cols_model:
@@ -681,7 +681,9 @@ dcc_parameters = [
 ]
 
 try:
-    start_date, end_date = st.date_input("Select Date Range", [data["timestamp"].min(), data["timestamp"].max()])
+    start_date, end_date = st.date_input(
+        "Select Date Range", [data["timestamp"].min(), data["timestamp"].max()]
+    )
     if start_date > end_date:
         st.error("Error: End date must be after start date.")
         st.stop()
@@ -789,7 +791,10 @@ with tab_insights:
         if summary_df.empty or not moisture_cols or not tension_cols:
             st.info("No data available for moisture homogenisation (missing moisture/tension columns).")
         else:
-            default_targets_moisture = {m_col: float(np.round(summary_df[m_col].median(), 2)) for m_col in sorted(moisture_cols)}
+            default_targets_moisture = {
+                m_col: float(np.round(summary_df[m_col].median(), 2))
+                for m_col in sorted(moisture_cols)
+            }
             moisture_inputs: Dict[str, float] = {}
 
             cols_m = st.columns(len(sorted(moisture_cols)))
@@ -865,7 +870,7 @@ with tab_insights:
                     dryness_score = moisture_diff + tension_diff / 10.0
                     action = "Add" if dryness_score > 0 else "Remove"
 
-                    water_per_percent = 0.67  # keep your constant
+                    water_per_percent = 0.67
                     change_litres = float(np.round(abs(moisture_diff) * water_per_percent, 2))
 
                     device_rec[f"Level {i+1} action"] = action
@@ -936,13 +941,19 @@ with tab_climate:
         )
     else:
         available_rooms = sorted(models.keys())
-        selected_rooms_pred = st.multiselect("Select room(s) for prediction", available_rooms, default=available_rooms)
+        selected_rooms_pred = st.multiselect(
+            "Select room(s) for prediction", available_rooms, default=available_rooms
+        )
 
         min_date = data["timestamp"].min().date()
         max_date = data["timestamp"].max().date()
 
-        exp_start_date = st.date_input("Experiment range start date", value=min_date, min_value=min_date, max_value=max_date, key="exp_start_date")
-        exp_end_date = st.date_input("Experiment range end date", value=min_date, min_value=min_date, max_value=max_date, key="exp_end_date")
+        exp_start_date = st.date_input(
+            "Experiment range start date", value=min_date, min_value=min_date, max_value=max_date, key="exp_start_date"
+        )
+        exp_end_date = st.date_input(
+            "Experiment range end date", value=min_date, min_value=min_date, max_value=max_date, key="exp_end_date"
+        )
 
         if exp_start_date > exp_end_date:
             st.error("Experiment start date must be <= end date.")
