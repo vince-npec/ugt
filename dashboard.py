@@ -2,25 +2,22 @@
 Extended Streamlit dashboard for NPEC Ecotrons.
 
 This file is based on the original NPEC Ecotron visualization dashboard and
-adds a new insights task for climate prediction.  The new task builds
-sinusoidal regression models for humidity and temperature in each room using
-historical sensor data.  Users can select a room and a date to obtain
-predicted climate conditions, and visualise the modelled annual cycle.  The
-idea of modelling seasonal climate variations with sine and cosine functions
-is well established in climatology: sinusoidal terms capture the annual
-cycle in temperature and humidity【316970089103360†L979-L984】.
+adds a new insights task for climate prediction.
 
-The remainder of the dashboard remains unchanged: users can upload data,
-downsample it, view time series plots, homogenise moisture levels and detect
-sensor issues.  The climate prediction feature automatically identifies
-columns containing the words "humidity" and "temperature" to build the
-models, so it works with a variety of sensor naming conventions.
+SECURITY NOTE
+-------------
+A sidebar password can optionally lock the device/camera menu. The password
+MUST NOT be hardcoded. Provide it via:
+- Streamlit secrets: st.secrets["SIDEBAR_PASS"]
+- Environment variable: SIDEBAR_PASS
+
+If no password is provided, the sidebar menu is unlocked by default.
 """
 
 import os
 import re
 import zipfile
-from typing import List, Tuple, Dict, Tuple as DTuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -30,10 +27,9 @@ import streamlit as st
 ###############################################################################
 # PAGE CONFIG
 ###############################################################################
-# Configure the Streamlit page.  Use a wide layout to provide more room for
-# charts and controls.  Set a descriptive title for the browser tab.
 st.set_page_config(
-    page_title="Visualization Dashboard | NPEC Ecotrons", layout="wide",
+    page_title="Visualization Dashboard | NPEC Ecotrons",
+    layout="wide",
 )
 
 ###############################################################################
@@ -45,7 +41,7 @@ def normalize_name(name: str) -> str:
 
     Normalization rules include trimming whitespace, replacing hyphens and
     underscores with spaces, converting to lowercase and applying a few
-    known alias corrections (e.g. "firebug" -> "fire bug").
+    known alias corrections.
     """
     s = name.strip().lower().replace("-", " ").replace("_", " ")
     fixes = {
@@ -66,32 +62,20 @@ def normalize_name(name: str) -> str:
 
 
 def ip_from(url: str) -> str:
-    """Extract just the hostname or IP from a full URL.  If parsing fails,
-    return the original string."""
+    """Extract just the hostname or IP from a full URL. If parsing fails, return the original string."""
     try:
         return url.split("//", 1)[1].split("/", 1)[0]
     except Exception:
         return url
 
 
-# Optional password for unlocking the sidebar.  This can be configured via
-# Streamlit secrets or environment variables.  When set, the sidebar menu
-# requires a password to view devices and cameras.  If no secret or
-# environment variable is provided, fall back to the historical default
-# password "NPEC2025!" to preserve previous behaviour.  Note that hard‑coding
-# passwords in code reduces security; it is recommended to define
-# ``SIDEBAR_PASS`` in your secrets or environment variables when deploying.
-SIDEBAR_PASS = st.secrets.get(
-    "SIDEBAR_PASS",
-    os.environ.get("SIDEBAR_PASS", "NPEC2025!")
-)
+# Sidebar password: NEVER hardcode a real password.
+# If empty/missing -> sidebar is unlocked by default.
+SIDEBAR_PASS = str(st.secrets.get("SIDEBAR_PASS", os.environ.get("SIDEBAR_PASS", ""))).strip()
 
 ###############################################################################
 # DEVICE DIRECTORY (SIDEBAR DATA)
 ###############################################################################
-# Each tuple contains the device name and the URL of its UGT interface.  These
-# URLs can be opened in a new browser tab from the sidebar.  The list may be
-# extended as new devices are added to the ecotron installation.
 DEVICES: List[Tuple[str, str]] = [
     ("Ulysses", "http://192.168.162.8/visu/#/main"),
     ("Admiral", "http://192.168.162.9/visu/#/main"),
@@ -131,10 +115,7 @@ DEVICES: List[Tuple[str, str]] = [
     ("Cricket", "http://192.168.162.43/visu/#/main"),
 ]
 
-# Emoji mapping for each device.  These icons appear next to device names in
-# the sidebar to provide a whimsical visual cue.  If a device name is not
-# present in the mapping, a default link icon will be used.
-EMOJI = {
+EMOJI: Dict[str, str] = {
     "ulysses": "🦋", "admiral": "🦋", "scarab": "🪲", "ladybug": "🐞",
     "stag beetle": "🪲", "mosquito": "🦟", "flea": "🪳", "yellowjacket": "🐝",
     "dragonfly": "🐉", "moth": "🦋", "cockroach": "🪳", "fly": "🪰",
@@ -147,10 +128,7 @@ EMOJI = {
     "cricket": "🦗",
 }
 
-# Mapping of device names to room and type (Advanced or Basic).  This is used
-# to group devices in the sidebar and display type information.  When a
-# device name is not found, the default is Ecolab 3 / Basic.
-META = {
+META: Dict[str, Tuple[str, str]] = {
     "ulysses": ("Ecolab 1", "Advanced"), "admiral": ("Ecolab 1", "Advanced"),
     "scarab": ("Ecolab 1", "Advanced"), "ladybug": ("Ecolab 1", "Advanced"),
     "yellowjacket": ("Ecolab 1", "Advanced"), "flea": ("Ecolab 1", "Advanced"),
@@ -177,8 +155,6 @@ def meta_for(name: str) -> Tuple[str, str]:
     return META.get(normalize_name(name), ("Ecolab 3", "Basic"))
 
 
-# RhizoCam units: each entry defines a camera host and the URLs of its
-# gantry and analysis interfaces.
 RHIZOCAMS = [
     {
         "host": "Cricket",
@@ -187,8 +163,6 @@ RHIZOCAMS = [
     }
 ]
 
-# IP cameras: each tuple contains camera name and IP address.  These are
-# grouped by room in the sidebar.
 IP_CAMERAS = [
     ("Admiral", "192.168.162.45"), ("Ant", "192.168.162.65"),
     ("Bumblebee", "192.168.162.68"), ("Caterpillar", "192.168.162.77"),
@@ -213,26 +187,22 @@ IP_CAMERAS = [
 ###############################################################################
 # SIDEBAR WITH OPTIONAL PASSWORD LOCK
 ###############################################################################
-# The sidebar allows users to browse devices, RhizoCams, and IP cameras.  A
-# password can optionally lock this menu to prevent accidental changes.
-
-# Ensure the state variable controlling whether the sidebar is unlocked exists
 if "sidebar_unlocked" not in st.session_state:
     st.session_state.sidebar_unlocked = (SIDEBAR_PASS == "")
 
 with st.sidebar:
     st.title("Devices")
 
-    # Lock / unlock controls at top of sidebar
+    if SIDEBAR_PASS == "":
+        st.info("Sidebar lock is disabled (no SIDEBAR_PASS set).")
+
     cols = st.columns([1, 1, 1.2])
     with cols[2]:
         if st.session_state.sidebar_unlocked:
-            # Show lock button when unlocked
-            if st.button("Lock menu", use_container_width=True):
+            if st.button("Lock menu", use_container_width=True, disabled=(SIDEBAR_PASS == "")):
                 st.session_state.sidebar_unlocked = False
                 st.rerun()
         elif SIDEBAR_PASS:
-            # Show unlock popover when locked
             with st.popover("Unlock"):
                 pw = st.text_input("Password", type="password", placeholder="••••••")
                 if st.button("Unlock"):
@@ -242,81 +212,76 @@ with st.sidebar:
                     else:
                         st.error("Wrong password")
 
-    # Show message if menu is locked
     if not st.session_state.sidebar_unlocked and SIDEBAR_PASS:
         st.caption("Menu locked. Click **Unlock** to enter the password.")
-    else:
-        # Filter inputs for device and camera lists
-        q = st.text_input("Filter by name or IP", value="")
-        room_filter = st.selectbox("Room", ["All", "Ecolab 1", "Ecolab 2", "Ecolab 3"], index=0)
-        rooms_order = ["Ecolab 1", "Ecolab 2", "Ecolab 3"] if room_filter == "All" else [room_filter]
+        st.stop()  # hide everything else in sidebar when locked
 
-        # List devices grouped by room
-        for room_name in rooms_order:
-            with st.expander(room_name, expanded=False):
-                for name, url in DEVICES:
-                    room, typ = meta_for(name)
-                    if room != room_name:
-                        continue
-                    # Apply filter on device name or IP
-                    if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
-                        continue
-                    key = normalize_name(name)
-                    emoji = EMOJI.get(key, "🔗")
-                    st.markdown(
-                        f"**{emoji} {name}**  \n"
-                        f"`{ip_from(url)}` • *{typ}*  \n"
-                        f"[Open ↗]({url})",
-                        help=f"{room} • {typ}",
-                    )
+    q = st.text_input("Filter by name or IP", value="")
+    room_filter = st.selectbox("Room", ["All", "Ecolab 1", "Ecolab 2", "Ecolab 3"], index=0)
+    rooms_order = ["Ecolab 1", "Ecolab 2", "Ecolab 3"] if room_filter == "All" else [room_filter]
 
-        # RhizoCams grouped by room
-        st.markdown("---")
-        st.subheader("RhizoCam units")
-        for room_name in rooms_order:
-            items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
-            if not items:
-                continue
-            with st.expander(room_name, expanded=False):
-                for rc in items:
-                    host = rc["host"]
-                    g_ip, a_ip = ip_from(rc["gantry"]), ip_from(rc["analysis"])
-                    if q and all(q.lower() not in s.lower() for s in (host, g_ip, a_ip)):
-                        continue
-                    st.markdown(
-                        f"**📷 RhizoCam @ {host}**  \n"
-                        f"`Gantry:` `{g_ip}`  \n"
-                        f"`Analysis:` `{a_ip}`  \n"
-                        f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
-                    )
+    for room_name in rooms_order:
+        with st.expander(room_name, expanded=False):
+            for name, url in DEVICES:
+                room, typ = meta_for(name)
+                if room != room_name:
+                    continue
+                if q and (q.lower() not in name.lower() and q.lower() not in ip_from(url)):
+                    continue
+                key = normalize_name(name)
+                emoji = EMOJI.get(key, "🔗")
+                st.markdown(
+                    f"**{emoji} {name}**  \n"
+                    f"`{ip_from(url)}` • *{typ}*  \n"
+                    f"[Open ↗]({url})",
+                    help=f"{room} • {typ}",
+                )
 
-        # IP cameras grouped by room
-        st.markdown("---")
-        st.subheader("IP cameras")
-        cams_by_room = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
-        for cam_name, ip in IP_CAMERAS:
-            room, _ = meta_for(cam_name)
-            cams_by_room[room].append((cam_name, ip))
-        for room_name in rooms_order:
-            with st.expander(room_name, expanded=False):
-                for cam_name, ip in cams_by_room.get(room_name, []):
-                    if q and (q.lower() not in cam_name.lower() and q.lower() not in ip.lower()):
-                        continue
-                    key = normalize_name(cam_name)
-                    emoji = EMOJI.get(key, "🎥")
-                    url = f"http://{ip}"
-                    st.markdown(
-                        f"**{emoji} {cam_name}**  \n"
-                        f"`{ip}`  \n"
-                        f"[Open ↗]({url})"
-                    )
+    st.markdown("---")
+    st.subheader("RhizoCam units")
+    for room_name in rooms_order:
+        items = [rc for rc in RHIZOCAMS if meta_for(rc["host"])[0] == room_name]
+        if not items:
+            continue
+        with st.expander(room_name, expanded=False):
+            for rc in items:
+                host = rc["host"]
+                g_ip, a_ip = ip_from(rc["gantry"]), ip_from(rc["analysis"])
+                if q and all(q.lower() not in s.lower() for s in (host, g_ip, a_ip)):
+                    continue
+                st.markdown(
+                    f"**📷 RhizoCam @ {host}**  \n"
+                    f"`Gantry:` `{g_ip}`  \n"
+                    f"`Analysis:` `{a_ip}`  \n"
+                    f"[Gantry ↗]({rc['gantry']}) &nbsp;|&nbsp; [Analysis ↗]({rc['analysis']})"
+                )
 
-        st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
+    st.markdown("---")
+    st.subheader("IP cameras")
+    cams_by_room: Dict[str, List[Tuple[str, str]]] = {"Ecolab 1": [], "Ecolab 2": [], "Ecolab 3": []}
+    for cam_name, ip in IP_CAMERAS:
+        room, _ = meta_for(cam_name)
+        cams_by_room[room].append((cam_name, ip))
+
+    for room_name in rooms_order:
+        with st.expander(room_name, expanded=False):
+            for cam_name, ip in cams_by_room.get(room_name, []):
+                if q and (q.lower() not in cam_name.lower() and q.lower() not in ip.lower()):
+                    continue
+                key = normalize_name(cam_name)
+                emoji = EMOJI.get(key, "🎥")
+                url = f"http://{ip}"
+                st.markdown(
+                    f"**{emoji} {cam_name}**  \n"
+                    f"`{ip}`  \n"
+                    f"[Open ↗]({url})"
+                )
+
+    st.caption("Tip: collapse the sidebar with the chevron (>) to give charts more room.")
 
 ###############################################################################
 # HEADER WITH LOGOS AND TITLE
 ###############################################################################
-# Display logos and the dashboard title at the top of the main content area.
 st.markdown(
     """
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -336,8 +301,6 @@ st.markdown("---")
 ###############################################################################
 # DATA LOADING AND PREPARATION
 ###############################################################################
-# Mapping of devices to default rooms used when reading CSV filenames.  This
-# dictionary helps assign a default "room" label to data loaded from files.
 room_assignments = {
     "Ulysses": "Room 1", "Admiral": "Room 1", "Scarab": "Room 1",
     "Ladybug": "Room 1", "Yellowjacket": "Room 1", "Flea": "Room 1",
@@ -345,36 +308,31 @@ room_assignments = {
     "Cockroach": "Room 2", "Termite": "Room 2", "Centipede": "Room 2",
     "Fly": "Room 2", "Giraffe": "Room 2", "Tarantula": "Room 2",
     "Fire bug": "Room 2", "Fire_Bug": "Room 2", "Tick": "Room 2",
-    "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2", "Dragonfly": "Room 2",
+    "Moth": "Room 2", "Millipede": "Room 2", "Mantis": "Room 2",
+    "Dragonfly": "Room 2",
 }
 
-# Maximum number of rows to load from uploaded files.  This prevents the
-# dashboard from freezing or running out of memory when very large logs are
-# uploaded.  **Raised from 50 000 to 200 000** so that the full 60‑day
-# experiment can be loaded when downsampling to hourly by default.
 MAX_ROWS = 200_000
 
 
-def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
-    """Load multiple semicolon-delimited CSV files uploaded by the user.
+def _normalize_device_from_filename(prefix: str) -> str:
+    if prefix == "Fire":
+        return "Fire bug"
+    if prefix == "Stag":
+        return "Stag beetle"
+    return prefix
 
-    Each CSV file is expected to be named "<device>_something.csv".  The
-    device name (before the underscore) is used to populate a 'device' column
-    and assign a 'room' column using the room_assignments dictionary.  The
-    function concatenates all data into a single DataFrame, truncating rows
-    when the max_rows limit is reached.
-    """
+
+def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     data_frames, total_rows = [], 0
     for uploaded_file in uploaded_files:
         try:
-            df = pd.read_csv(uploaded_file, delimiter=';')
-            device_name = uploaded_file.name.split('_')[0]
-            if device_name == "Fire":
-                device_name = "Fire bug"
-            elif device_name == "Stag":
-                device_name = "Stag beetle"
+            df = pd.read_csv(uploaded_file, delimiter=";")
+            device_prefix = uploaded_file.name.split("_")[0]
+            device_name = _normalize_device_from_filename(device_prefix)
             df["device"] = device_name
             df["room"] = room_assignments.get(device_name, "Unknown")
+
             if not df.empty:
                 if max_rows and total_rows + len(df) > max_rows:
                     df = df.iloc[: max_rows - total_rows]
@@ -385,6 +343,7 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
                     break
         except Exception as e:
             st.error(f"Error reading {uploaded_file.name}: {e}")
+
     if not data_frames:
         st.error("No data frames were created from the uploaded files.")
         return pd.DataFrame()
@@ -392,36 +351,33 @@ def load_data(uploaded_files, max_rows: int = MAX_ROWS) -> pd.DataFrame:
 
 
 def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
-    """Load multiple CSV files contained within a ZIP archive.
-
-    The ZIP file may contain files in nested directories.  Only files ending
-    with '.csv' and not starting with '__MACOSX/' are processed.  The device
-    name is extracted as for load_data().
-    """
     data_frames, total_rows = [], 0
     with zipfile.ZipFile(zip_file) as z:
         for filename in z.namelist():
-            if filename.endswith(".csv") and not filename.startswith("__MACOSX/"):
-                with z.open(filename) as f:
-                    try:
-                        df = pd.read_csv(f, delimiter=';')
-                        device_name = filename.split('/')[0].split('_')[0]
-                        if device_name == "Fire":
-                            device_name = "Fire bug"
-                        elif device_name == "Stag":
-                            device_name = "Stag beetle"
-                        df["device"] = device_name
-                        df["room"] = room_assignments.get(device_name, "Unknown")
-                        if not df.empty:
-                            if max_rows and total_rows + len(df) > max_rows:
-                                df = df.iloc[: max_rows - total_rows]
-                            data_frames.append(df)
-                            total_rows += len(df)
-                            if max_rows and total_rows >= max_rows:
-                                st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
-                                break
-                    except Exception as e:
-                        st.error(f"Error reading {filename}: {e}")
+            if not (filename.endswith(".csv") and not filename.startswith("__MACOSX/")):
+                continue
+            with z.open(filename) as f:
+                try:
+                    df = pd.read_csv(f, delimiter=";")
+                    # If nested folders exist, keep same heuristic:
+                    # "<folder>/<device>_something.csv" OR "<device>_something.csv"
+                    base = filename.split("/")[-1]
+                    device_prefix = base.split("_")[0]
+                    device_name = _normalize_device_from_filename(device_prefix)
+                    df["device"] = device_name
+                    df["room"] = room_assignments.get(device_name, "Unknown")
+
+                    if not df.empty:
+                        if max_rows and total_rows + len(df) > max_rows:
+                            df = df.iloc[: max_rows - total_rows]
+                        data_frames.append(df)
+                        total_rows += len(df)
+                        if max_rows and total_rows >= max_rows:
+                            st.warning(f"Loaded {max_rows} rows (limit reached for performance).")
+                            break
+                except Exception as e:
+                    st.error(f"Error reading {filename}: {e}")
+
     if not data_frames:
         st.error("No data frames were created from the ZIP file.")
         return pd.DataFrame()
@@ -429,19 +385,17 @@ def load_data_from_zip(zip_file, max_rows: int = MAX_ROWS) -> pd.DataFrame:
 
 
 def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
-    """Downsample the dataset to a lower frequency.
-
-    If the frequency is '10T' (the raw frequency of 10 minutes), the data
-    remains unchanged.  For other frequencies, numeric columns are resampled
-    using the mean per group of device and room.
-    """
     if freq == "10T":
         return df
     if "timestamp" not in df.columns:
         return df
+
     numeric_cols = df.select_dtypes(include="number").columns
+    if len(numeric_cols) == 0:
+        return df
+
     frames = []
-    for (device, room), group in df.groupby(["device", "room"]):
+    for (device, room), group in df.groupby(["device", "room"], dropna=False):
         group = group.set_index("timestamp").sort_index()
         resampled = group[numeric_cols].resample(freq).mean()
         resampled["device"] = device
@@ -450,7 +404,7 @@ def resample_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else df
 
 
-def looks_like_data_point(col):
+def looks_like_data_point(col) -> bool:
     """Heuristically determine if a column name represents numeric data."""
     try:
         float(str(col))
@@ -465,27 +419,27 @@ def looks_like_data_point(col):
 
 
 def derive_tension_targets(
-    data: pd.DataFrame, moisture_cols: List[str], tension_cols: List[str], moisture_targets: dict
-) -> dict:
-    """Compute target tension for each level based on moisture targets.
-
-    For each pair of moisture and tension columns (assumed sorted by level),
-    fit a linear regression of tension versus moisture and evaluate the
-    regression at the desired moisture target.  Clamp the result to the
-    physical range [-100, 1500] kPa.
-    """
-    targets = {}
+    data: pd.DataFrame,
+    moisture_cols: List[str],
+    tension_cols: List[str],
+    moisture_targets: Dict[str, float],
+) -> Dict[str, float]:
+    """Compute target tension for each level based on moisture targets."""
+    targets: Dict[str, float] = {}
     for i, m_col in enumerate(sorted(moisture_cols)):
+        if i >= len(sorted(tension_cols)):
+            break
         t_col = sorted(tension_cols)[i]
-        x = data[m_col].astype(float)
-        y = data[t_col].astype(float)
+        x = pd.to_numeric(data[m_col], errors="coerce")
+        y = pd.to_numeric(data[t_col], errors="coerce")
         mask = (~x.isna()) & (~y.isna())
         if mask.sum() > 1:
             slope, intercept = np.polyfit(x[mask], y[mask], 1)
         else:
-            slope, intercept = -2.0, y.median()
-        predicted = intercept + slope * moisture_targets[m_col]
-        predicted = max(-100.0, min(1500.0, predicted))
+            slope, intercept = -2.0, float(np.nanmedian(y.values)) if np.isfinite(np.nanmedian(y.values)) else 0.0
+
+        predicted = intercept + slope * float(moisture_targets.get(m_col, 0.0))
+        predicted = float(max(-100.0, min(1500.0, predicted)))
         targets[t_col] = predicted
     return targets
 
@@ -494,56 +448,41 @@ def derive_tension_targets(
 # CLIMATE MODELLING FUNCTIONS
 ###############################################################################
 def build_seasonal_models(
-    df: pd.DataFrame, humidity_cols: List[str], temperature_cols: List[str]
+    df: pd.DataFrame,
+    humidity_cols: List[str],
+    temperature_cols: List[str],
 ) -> Dict[str, Dict[str, np.ndarray]]:
-    """Fit sinusoidal regression models for humidity and temperature for each room.
+    """
+    Fit sinusoidal regression models for humidity and temperature for each room.
 
-    This function computes least‑squares coefficients directly using NumPy,
-    avoiding external dependencies like scikit‑learn.  For each room the
-    relationship between the target variable and the day of year is
-    approximated with a linear combination of sine and cosine terms plus
-    an intercept:
-
-        y ≈ β₁ · sin(2π · doy/365) + β₂ · cos(2π · doy/365) + β₀
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame containing ``timestamp`` and ``room`` columns along with
-        sensor readings.
-    humidity_cols : list of str
-        Column names representing humidity measurements.
-    temperature_cols : list of str
-        Column names representing temperature measurements.
-
-    Returns
-    -------
-    dict
-        A mapping of room to another mapping of target name ("humidity",
-        "temperature") to a NumPy array of coefficients ``[β₁, β₂, β₀]``.  If
-        a particular target is not present for a given room, that key is
-        omitted.
+    y ≈ β1*sin(2π*doy/365) + β2*cos(2π*doy/365) + β0
     """
     df = df.copy()
     df["dayofyear"] = df["timestamp"].dt.dayofyear
     df["sin"] = np.sin(2 * np.pi * df["dayofyear"] / 365.0)
     df["cos"] = np.cos(2 * np.pi * df["dayofyear"] / 365.0)
+
     models: Dict[str, Dict[str, np.ndarray]] = {}
     for room, g in df.groupby("room"):
         models[room] = {}
-        # Build design matrix with sine, cosine and intercept
+
         X_base = g[["sin", "cos"]].values
         X_design = np.hstack([X_base, np.ones((len(X_base), 1))])
+
         if humidity_cols:
-            y_h = g[humidity_cols].astype(float).mean(axis=1).values
-            if len(y_h) > 0:
+            y_h = pd.to_numeric(g[humidity_cols].astype(float).mean(axis=1), errors="coerce").values
+            if np.isfinite(y_h).sum() > 5:
                 coeffs_h, *_ = np.linalg.lstsq(X_design, y_h, rcond=None)
                 models[room]["humidity"] = coeffs_h
+
         if temperature_cols:
-            y_t = g[temperature_cols].astype(float).mean(axis=1).values
-            if len(y_t) > 0:
+            y_t = pd.to_numeric(g[temperature_cols].astype(float).mean(axis=1), errors="coerce").values
+            if np.isfinite(y_t).sum() > 5:
                 coeffs_t, *_ = np.linalg.lstsq(X_design, y_t, rcond=None)
                 models[room]["temperature"] = coeffs_t
+
+    # Remove empty rooms
+    models = {k: v for k, v in models.items() if v}
     return models
 
 
@@ -552,42 +491,13 @@ def predict_for_room(
     date: pd.Timestamp,
     models: Dict[str, Dict[str, np.ndarray]],
     seasonal_avgs: Dict[str, pd.DataFrame],
-) -> DTuple[float, float]:
-    """Predict humidity and temperature for a given room and date.
+) -> Tuple[float, float]:
+    """Predict humidity and temperature for a given room and date."""
+    dayofyear = int(date.dayofyear)
 
-    The prediction is based on seasonal averages if available; if the
-    corresponding day of year exists in ``seasonal_avgs``, we return the
-    averaged humidity and temperature for that day.  When the seasonal
-    averages dictionary does not contain a value for the requested room
-    or day, we fall back to the sinusoidal regression models contained in
-    ``models``.  This fallback ensures that predictions are always
-    available, even for days not observed in the data.
-
-    Parameters
-    ----------
-    room : str
-        The room identifier for which to predict.
-    date : pd.Timestamp
-        The date for prediction.  Only the day‑of‑year component matters
-        because both seasonal averages and the sinusoidal model depend on
-        day of year.
-    models : dict
-        Dictionary mapping room to fitted coefficients for sinusoidal models.
-    seasonal_avgs : dict
-        Dictionary mapping room to DataFrame of per‑day averages.  The
-        DataFrame index represents the day of year and contains columns
-        ``hum_avg`` and/or ``temp_avg``.
-
-    Returns
-    -------
-    tuple(float, float)
-        Predicted humidity (% RH) and temperature (°C).  If a target is
-        unavailable from both sources, ``NaN`` is returned.
-    """
-    dayofyear = date.dayofyear
     humidity_pred = float("nan")
     temperature_pred = float("nan")
-    # Try seasonal averages first
+
     if room in seasonal_avgs:
         daily_stats = seasonal_avgs[room]
         if dayofyear in daily_stats.index:
@@ -595,16 +505,19 @@ def predict_for_room(
                 humidity_pred = float(daily_stats.loc[dayofyear, "hum_avg"])
             if "temp_avg" in daily_stats.columns:
                 temperature_pred = float(daily_stats.loc[dayofyear, "temp_avg"])
-    # If missing values remain, fall back to sinusoidal model
+
     if (np.isnan(humidity_pred) or np.isnan(temperature_pred)) and room in models:
         sin_val = np.sin(2 * np.pi * dayofyear / 365.0)
         cos_val = np.cos(2 * np.pi * dayofyear / 365.0)
+
         if np.isnan(humidity_pred) and "humidity" in models[room]:
             coeffs_h = models[room]["humidity"]
-            humidity_pred = coeffs_h[0] * sin_val + coeffs_h[1] * cos_val + coeffs_h[2]
+            humidity_pred = float(coeffs_h[0] * sin_val + coeffs_h[1] * cos_val + coeffs_h[2])
+
         if np.isnan(temperature_pred) and "temperature" in models[room]:
             coeffs_t = models[room]["temperature"]
-            temperature_pred = coeffs_t[0] * sin_val + coeffs_t[1] * cos_val + coeffs_t[2]
+            temperature_pred = float(coeffs_t[0] * sin_val + coeffs_t[1] * cos_val + coeffs_t[2])
+
     return humidity_pred, temperature_pred
 
 
@@ -613,68 +526,47 @@ def get_predictions_over_year(
     models: Dict[str, Dict[str, np.ndarray]],
     seasonal_avgs: Dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
-    """Return predicted humidity and temperature for each day of the year for the given room.
-
-    The predictions use seasonal averages where available.  For days not present
-    in the seasonal averages or when averages are missing for a variable,
-    the function falls back to the sinusoidal model.
-
-    Parameters
-    ----------
-    room : str
-        Room identifier.
-    models : dict
-        Sinusoidal model coefficients as returned by ``build_seasonal_models``.
-    seasonal_avgs : dict
-        Seasonal averages per room and day of year.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with ``dayofyear`` as the index and columns ``humidity``
-        and/or ``temperature`` containing the predicted values.
-    """
+    """Return predicted humidity and temperature for each day of the year for the given room."""
     days = np.arange(1, 366)
-    preds: Dict[str, List[float]] = {"dayofyear": days}
-    # Precompute sinusoidal terms for fallback
+    preds: Dict[str, List[float]] = {"dayofyear": days.tolist(), "humidity": [], "temperature": []}
+
     sin_vals = np.sin(2 * np.pi * days / 365.0)
     cos_vals = np.cos(2 * np.pi * days / 365.0)
-    for var in ["humidity", "temperature"]:
-        preds[var] = []
+
     for idx, doy in enumerate(days):
-        # Use seasonal average if available
-        use_avg = room in seasonal_avgs and doy in seasonal_avgs[room].index
-        for var in ["humidity", "temperature"]:
-            val = float("nan")
-            if use_avg:
-                col = "hum_avg" if var == "humidity" else "temp_avg"
-                if col in seasonal_avgs[room].columns:
-                    val = float(seasonal_avgs[room].loc[doy, col])
-            if np.isnan(val) and room in models and var in models[room]:
-                coeffs = models[room][var]
-                val = coeffs[0] * sin_vals[idx] + coeffs[1] * cos_vals[idx] + coeffs[2]
-            preds[var].append(val)
+        use_avg = room in seasonal_avgs and int(doy) in seasonal_avgs[room].index
+
+        # humidity
+        h_val = float("nan")
+        if use_avg and "hum_avg" in seasonal_avgs[room].columns:
+            h_val = float(seasonal_avgs[room].loc[int(doy), "hum_avg"])
+        if np.isnan(h_val) and room in models and "humidity" in models[room]:
+            c = models[room]["humidity"]
+            h_val = float(c[0] * sin_vals[idx] + c[1] * cos_vals[idx] + c[2])
+        preds["humidity"].append(h_val)
+
+        # temperature
+        t_val = float("nan")
+        if use_avg and "temp_avg" in seasonal_avgs[room].columns:
+            t_val = float(seasonal_avgs[room].loc[int(doy), "temp_avg"])
+        if np.isnan(t_val) and room in models and "temperature" in models[room]:
+            c = models[room]["temperature"]
+            t_val = float(c[0] * sin_vals[idx] + c[1] * cos_vals[idx] + c[2])
+        preds["temperature"].append(t_val)
+
     return pd.DataFrame(preds)
 
 
 ###############################################################################
 # MAIN APPLICATION
 ###############################################################################
-# Upload controls and initial data loading
 st.title("Upload CSV or ZIP files")
 
-uploaded_files = st.file_uploader(
-    "Upload CSV files", accept_multiple_files=True, type="csv"
-)
-uploaded_zip = st.file_uploader(
-    "Upload a ZIP file containing CSV files", type="zip"
-)
+uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type="csv")
+uploaded_zip = st.file_uploader("Upload a ZIP file containing CSV files", type="zip")
 
-# Warn about large ZIPs
 if uploaded_zip and hasattr(uploaded_zip, "size") and uploaded_zip.size > 50_000_000:
-    st.warning(
-        "Uploaded ZIP is quite large; this may take a while or could crash the dashboard."
-    )
+    st.warning("Uploaded ZIP is quite large; this may take a while or could crash the dashboard.")
 
 data = pd.DataFrame()
 if uploaded_files:
@@ -682,19 +574,21 @@ if uploaded_files:
 elif uploaded_zip:
     data = load_data_from_zip(uploaded_zip)
 else:
-    # Stop execution until a file is uploaded
     st.stop()
 
-# Convert timestamps to datetime (European format)
 if data.empty:
     st.stop()
+
+if "timestamp" not in data.columns:
+    st.error("Missing required column: 'timestamp'.")
+    st.stop()
+
 try:
-    data["timestamp"] = pd.to_datetime(data["timestamp"], format="%d.%m.%Y %H:%M:%S")
+    data["timestamp"] = pd.to_datetime(data["timestamp"], format="%d.%m.%Y %H:%M:%S", errors="raise")
 except Exception as e:
     st.error(f"Error converting timestamp: {e}")
     st.stop()
 
-# Downsampling frequency selection
 sampling_options = {
     "Raw (10 min)": "10T",
     "30 min": "30T",
@@ -702,80 +596,49 @@ sampling_options = {
     "Daily": "1D",
 }
 freq_labels = list(sampling_options.keys())
-# Default to hourly downsampling.  We compute the index dynamically to avoid
-# hard‑coding the position should the order of keys ever change.
 default_index = freq_labels.index("Hourly") if "Hourly" in freq_labels else 0
-selected_freq_label = st.selectbox(
-    "Select Data Frequency (downsampling)", freq_labels, index=default_index
-)
+selected_freq_label = st.selectbox("Select Data Frequency (downsampling)", freq_labels, index=default_index)
 selected_freq = sampling_options[selected_freq_label]
 
 data = resample_data(data, selected_freq)
 
-# Interpolate and fill numeric columns to smooth missing data
 numeric_cols = data.select_dtypes(include="number").columns
-data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
+if len(numeric_cols) > 0:
+    data[numeric_cols] = data[numeric_cols].interpolate().ffill().bfill()
 
-# Reorder columns: device and room at the front
 columns_order = ["device", "room"] + [c for c in data.columns if c not in ["device", "room"]]
 data = data[columns_order]
 
 ###############################################################################
 # PREPARE CLIMATE MODELS AND SEASONAL AVERAGES
 ###############################################################################
-# Identify humidity and temperature columns for modelling.
-# For climate predictions we prefer to use atmosphere sensors (ambient conditions)
-# rather than soil moisture or soil temperature sensors.  We therefore
-# prioritise columns containing both "humidity" and "atmosphere" (case insensitive)
-# or both "temperature" and "atmosphere".  If such columns are absent,
-# we fall back to any column containing "humidity" or "temperature".
 lowercase_cols = {c.lower(): c for c in data.columns}
+
 atmos_humidity_cols = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c and "atmosphere" in c]
 atmos_temperature_cols = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c and "atmosphere" in c]
-if atmos_humidity_cols:
-    humidity_cols_model = atmos_humidity_cols
-else:
-    humidity_cols_model = [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
-if atmos_temperature_cols:
-    temperature_cols_model = atmos_temperature_cols
-else:
-    temperature_cols_model = [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
 
-# Fit sinusoidal regression models (sine/cosine) for each room.  These are used
-# as a fallback when seasonal averages are unavailable or when extrapolating to
-# days of year not present in the historical data.  The models dictionary
-# maps room names to coefficient arrays for humidity and temperature.
+humidity_cols_model = atmos_humidity_cols if atmos_humidity_cols else [lowercase_cols[c] for c in lowercase_cols if "humidity" in c]
+temperature_cols_model = atmos_temperature_cols if atmos_temperature_cols else [lowercase_cols[c] for c in lowercase_cols if "temperature" in c]
+
 models: Dict[str, Dict[str, np.ndarray]] = {}
 if humidity_cols_model or temperature_cols_model:
     models = build_seasonal_models(data, humidity_cols_model, temperature_cols_model)
 
-# Compute seasonal averages per day of year for each room.  For each record
-# we calculate the mean humidity and temperature across their respective
-# sensor columns, then average these values across all available years at
-# each day of the year.  The resulting `seasonal_avgs` dictionary maps
-# room names to DataFrames indexed by day of year with columns
-# `hum_avg` and/or `temp_avg`.  These averages provide realistic
-# predictions that remain within the observed range for that room.
 seasonal_avgs: Dict[str, pd.DataFrame] = {}
 if humidity_cols_model or temperature_cols_model:
     tmp_data = data.copy()
     tmp_data["dayofyear"] = tmp_data["timestamp"].dt.dayofyear
-    # Compute per‑row averages for humidity and temperature, if columns exist
+
+    cols = []
     if humidity_cols_model:
-        tmp_data["hum_avg"] = tmp_data[humidity_cols_model].astype(float).mean(axis=1)
+        tmp_data["hum_avg"] = pd.to_numeric(tmp_data[humidity_cols_model].astype(float).mean(axis=1), errors="coerce")
+        cols.append("hum_avg")
     if temperature_cols_model:
-        tmp_data["temp_avg"] = tmp_data[temperature_cols_model].astype(float).mean(axis=1)
-    # Group by room and day of year to compute seasonal averages
+        tmp_data["temp_avg"] = pd.to_numeric(tmp_data[temperature_cols_model].astype(float).mean(axis=1), errors="coerce")
+        cols.append("temp_avg")
+
     for room, group in tmp_data.groupby("room"):
-        cols = []
-        if humidity_cols_model:
-            cols.append("hum_avg")
-        if temperature_cols_model:
-            cols.append("temp_avg")
-        # Compute the mean for each day of year across all years
         daily_stats = group.groupby("dayofyear")[cols].mean().copy()
-        # Ensure that the index covers all days 1..365 for easier lookup; fill
-        # missing days by interpolation and forward/backward fill.
         full_index = pd.RangeIndex(1, 366)
         daily_stats = daily_stats.reindex(full_index)
         daily_stats = daily_stats.interpolate().ffill().bfill()
@@ -784,29 +647,28 @@ if humidity_cols_model or temperature_cols_model:
 ###############################################################################
 # FILTER SELECTIONS FOR ROOMS, DEVICES AND PARAMETERS
 ###############################################################################
-devices_list = data["device"].unique()
+devices_list = np.sort(data["device"].dropna().unique())
 device_options = ["All"] + devices_list.tolist()
-rooms_list = data["room"].unique()
+
+rooms_list = np.sort(data["room"].dropna().unique())
 room_options = ["All"] + rooms_list.tolist()
 
 st.title("Sensor Data Dashboard")
 
-selected_rooms = st.multiselect("Select Rooms", room_options, default="All")
+selected_rooms = st.multiselect("Select Rooms", room_options, default=["All"])
 if "All" in selected_rooms:
     selected_rooms = rooms_list.tolist()
 
-selected_devices = st.multiselect("Select Devices", device_options, default="All")
+selected_devices = st.multiselect("Select Devices", device_options, default=["All"])
 if "All" in selected_devices:
     selected_devices = devices_list.tolist()
 
-# Identify non-numeric columns for dynamic parameter selection
 all_columns = [
     c
     for c in data.columns
     if c not in ["timestamp", "device", "room"] and not looks_like_data_point(c)
 ]
 
-# Predefined standard and DCC parameter lists
 standard_parameters = [
     "Atmosphere temperature (°C)", "Atmosphere humidity (% RH)",
     "FRT tension 1 (kPa)", "FRT tension 2 (kPa)", "FRT tension 3 (kPa)",
@@ -818,11 +680,8 @@ dcc_parameters = [
     "Current Days Irrigation (L)", "Lysimeter weight (Kg)", "LBC tank weight (Kg)",
 ]
 
-# Date range selection
 try:
-    start_date, end_date = st.date_input(
-        "Select Date Range", [data["timestamp"].min(), data["timestamp"].max()]
-    )
+    start_date, end_date = st.date_input("Select Date Range", [data["timestamp"].min(), data["timestamp"].max()])
     if start_date > end_date:
         st.error("Error: End date must be after start date.")
         st.stop()
@@ -830,13 +689,12 @@ except Exception as e:
     st.error(f"Error with date input: {e}")
     st.stop()
 
-# Filter data by room, device and date range
 filtered_data = data[
     (data["room"].isin(selected_rooms))
     & (data["device"].isin(selected_devices))
     & (data["timestamp"] >= pd.to_datetime(start_date))
     & (data["timestamp"] <= pd.to_datetime(end_date))
-]
+].copy()
 
 if filtered_data.empty:
     st.write("No data available for the selected parameters and date range.")
@@ -845,7 +703,6 @@ if filtered_data.empty:
 ###############################################################################
 # TAB SETUP
 ###############################################################################
-# Create three tabs: Visualizations, Insights and Climate predictions
 tab_visuals, tab_insights, tab_climate = st.tabs(["Visualizations", "Insights", "Climate predictions"])
 
 ###############################################################################
@@ -853,27 +710,20 @@ tab_visuals, tab_insights, tab_climate = st.tabs(["Visualizations", "Insights", 
 ###############################################################################
 with tab_visuals:
     st.subheader("Visualizations")
-    parameter_options = (
-        ["Standard Parameters", "DCC project"] + all_columns
-        if all_columns
-        else ["Standard Parameters", "DCC project"]
-    )
-    selected_parameters = st.multiselect(
-        "Select Parameters", parameter_options
-    )
+    parameter_options = (["Standard Parameters", "DCC project"] + all_columns) if all_columns else ["Standard Parameters", "DCC project"]
+    selected_parameters = st.multiselect("Select Parameters", parameter_options)
 
-    # Determine which columns to plot
-    final_parameters, seen = [], set()
+    final_parameters: List[str] = []
+    seen = set()
+
     if "Standard Parameters" in selected_parameters:
         final_parameters += [p for p in standard_parameters if p in data.columns]
     if "DCC project" in selected_parameters:
         final_parameters += [p for p in dcc_parameters if p in data.columns]
-    final_parameters += [
-        p for p in selected_parameters if p not in ["Standard Parameters", "DCC project"]
-    ]
+    final_parameters += [p for p in selected_parameters if p not in ["Standard Parameters", "DCC project"]]
+
     final_parameters = [x for x in final_parameters if not (x in seen or seen.add(x))]
 
-    # Plot time series for each selected parameter
     if final_parameters and not filtered_data.empty:
         for parameter in final_parameters:
             fig = px.line()
@@ -881,22 +731,24 @@ with tab_visuals:
                 ddf = filtered_data[filtered_data["device"] == device]
                 if parameter in ddf.columns:
                     fig.add_scatter(
-                        x=ddf["timestamp"], y=ddf[parameter],
-                        mode="lines", name=f"{device} - {parameter}", connectgaps=False
+                        x=ddf["timestamp"],
+                        y=ddf[parameter],
+                        mode="lines",
+                        name=f"{device} - {parameter}",
+                        connectgaps=False,
                     )
             fig.update_layout(
                 title=f"Time Series Comparison for {parameter}",
-                xaxis_title="Timestamp", yaxis_title=parameter, height=600
+                xaxis_title="Timestamp",
+                yaxis_title=parameter,
+                height=600,
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Show first 100 rows of filtered data
         st.subheader("Raw Data")
         st.dataframe(filtered_data.head(100))
         if len(filtered_data) > 100:
-            st.info(
-                f"Showing first 100 of {len(filtered_data)} rows out of {len(filtered_data)} total."
-            )
+            st.info(f"Showing first 100 of {len(filtered_data)} rows out of {len(filtered_data)} total.")
     else:
         st.write("No data available for the selected parameters and date range.")
 
@@ -905,119 +757,127 @@ with tab_visuals:
 ###############################################################################
 with tab_insights:
     st.subheader("Insights")
-    # Insights tasks (climate predictions moved to its own tab)
+
     insight_task = st.selectbox(
         "Select an insights task",
         ["Homogenize moisture content", "Detect sensor issues"],
     )
 
-    # Prepare summary statistics for moisture and tension
-    moisture_cols = [col for col in filtered_data.columns if col.startswith("SMT water content")]
-    tension_cols = [col for col in filtered_data.columns if col.startswith("FRT tension")]
+    moisture_cols = [col for col in filtered_data.columns if str(col).startswith("SMT water content")]
+    tension_cols = [col for col in filtered_data.columns if str(col).startswith("FRT tension")]
+
+    cols_to_summarize = moisture_cols + tension_cols
     summary_df = (
-        filtered_data.groupby("device")[moisture_cols + tension_cols]
-        .mean()
+        filtered_data.groupby("device")[cols_to_summarize]
+        .mean(numeric_only=True)
         .reset_index()
+        if cols_to_summarize
+        else pd.DataFrame()
     )
 
     if insight_task == "Homogenize moisture content":
         st.markdown(
             """
-            **Objective:** Bring soil moisture and tension levels across all devices
-            into consistent ranges at each sensor level.  Specify your desired
-            moisture content for each level below.  The dashboard derives tension
-            targets automatically (using a linear fit and clamping them to the
-            sensor’s valid range) and recommends whether to
-            add or remove water for each device and level.
-            Current values showed below represent the current averages across all devices. 
-            For the current experiment the aimed values should be: ≈35 % VWC in clay 
-            (Level 1), ≈30 % in loam (Level 2) and ≈20 % in sand (Level 3).
-            
+            **Objective:** Bring soil moisture and tension levels across all devices into consistent ranges.
+            Specify your desired moisture content for each level below. The dashboard derives tension targets
+            automatically (linear fit, clamped to [-100, 1500] kPa) and recommends whether to add or remove water.
+
+            Suggested targets (example): ≈35 % VWC in clay (Level 1), ≈30 % in loam (Level 2), ≈20 % in sand (Level 3).
             """
         )
 
-        if summary_df.empty:
-            st.info("No data to analyse for moisture homogenisation.")
+        if summary_df.empty or not moisture_cols or not tension_cols:
+            st.info("No data available for moisture homogenisation (missing moisture/tension columns).")
         else:
-            # Default moisture targets from median of each column
-            default_targets_moisture = {
-                m_col: round(summary_df[m_col].median(), 2)
-                for m_col in sorted(moisture_cols)
-            }
-            moisture_inputs = {}
+            default_targets_moisture = {m_col: float(np.round(summary_df[m_col].median(), 2)) for m_col in sorted(moisture_cols)}
+            moisture_inputs: Dict[str, float] = {}
+
             cols_m = st.columns(len(sorted(moisture_cols)))
             for i, m_col in enumerate(sorted(moisture_cols)):
                 with cols_m[i]:
-                    moisture_inputs[m_col] = st.number_input(
-                        f"Level {i+1}",
-                        min_value=0.0,
-                        max_value=100.0,
-                        value=float(default_targets_moisture[m_col]),
-                        step=0.1,
-                        format="%.1f",
+                    moisture_inputs[m_col] = float(
+                        st.number_input(
+                            f"Level {i+1}",
+                            min_value=0.0,
+                            max_value=100.0,
+                            value=float(default_targets_moisture[m_col]),
+                            step=0.1,
+                            format="%.1f",
+                        )
                     )
 
-            # Derive target tension values
-            target_tension_values = derive_tension_targets(
-                filtered_data, moisture_cols, tension_cols, moisture_inputs
-            )
+            target_tension_values = derive_tension_targets(filtered_data, moisture_cols, tension_cols, moisture_inputs)
+
             st.write("### Derived target tension (kPa)")
             for i, t_col in enumerate(sorted(tension_cols)):
-                st.write(f"Level {i+1}: {target_tension_values[t_col]:.1f} kPa")
+                if t_col in target_tension_values:
+                    st.write(f"Level {i+1}: {target_tension_values[t_col]:.1f} kPa")
 
             st.write("### Average moisture and tension per device")
-            # Moisture bar chart
+
             moist_melt = summary_df.melt(
                 id_vars=["device"],
                 value_vars=moisture_cols,
-                var_name="Sensor", value_name="Moisture (%)"
+                var_name="Sensor",
+                value_name="Moisture (%)",
             )
             fig_moist = px.bar(
-                moist_melt, x="device", y="Moisture (%)", color="Sensor",
-                barmode="group", title="Average soil moisture per device"
+                moist_melt,
+                x="device",
+                y="Moisture (%)",
+                color="Sensor",
+                barmode="group",
+                title="Average soil moisture per device",
             )
             st.plotly_chart(fig_moist, use_container_width=True)
 
-            # Tension bar chart
             tension_melt = summary_df.melt(
                 id_vars=["device"],
                 value_vars=tension_cols,
-                var_name="Sensor", value_name="Tension (kPa)"
+                var_name="Sensor",
+                value_name="Tension (kPa)",
             )
             fig_tension = px.bar(
-                tension_melt, x="device", y="Tension (kPa)", color="Sensor",
-                barmode="group", title="Average soil tension per device"
+                tension_melt,
+                x="device",
+                y="Tension (kPa)",
+                color="Sensor",
+                barmode="group",
+                title="Average soil tension per device",
             )
             st.plotly_chart(fig_tension, use_container_width=True)
 
-            # Compute irrigation/suction recommendations
             recs = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
-                device_rec = {"device": device}
+                device_rec: Dict[str, object] = {"device": device}
                 for i, m_col in enumerate(sorted(moisture_cols)):
+                    if i >= len(sorted(tension_cols)):
+                        continue
                     t_col = sorted(tension_cols)[i]
-                    moisture_diff = moisture_inputs[m_col] - row[m_col]
-                    # Positive tension_diff means soil is drier than target
-                    tension_diff = row[t_col] - target_tension_values[t_col]
-                    # Combine differences: dryness_score > 0 means add water
+                    moisture_val = float(row.get(m_col, np.nan))
+                    tension_val = float(row.get(t_col, np.nan))
+
+                    moisture_diff = float(moisture_inputs[m_col] - moisture_val) if np.isfinite(moisture_val) else 0.0
+                    tension_target = float(target_tension_values.get(t_col, np.nan))
+                    tension_diff = float(tension_val - tension_target) if (np.isfinite(tension_val) and np.isfinite(tension_target)) else 0.0
+
                     dryness_score = moisture_diff + tension_diff / 10.0
                     action = "Add" if dryness_score > 0 else "Remove"
-                    # Water volume per 1% VWC difference; adjust constant here
-                    water_per_percent = 0.67
-                    change_litres = round(
-                        abs(moisture_diff) * water_per_percent, 2
-                    )
+
+                    water_per_percent = 0.67  # keep your constant
+                    change_litres = float(np.round(abs(moisture_diff) * water_per_percent, 2))
+
                     device_rec[f"Level {i+1} action"] = action
                     device_rec[f"Level {i+1} change (L)"] = change_litres
+
                 recs.append(device_rec)
 
             rec_df = pd.DataFrame(recs)
             st.write("### Irrigation/Suction recommendations")
             st.write(
-                "For each device and soil depth, the table below shows whether to add or remove water and the "
-                "approximate litres needed to reach your target VWC. These volumes are calculated from the difference "
-                "between the target and observed moisture content multiplied by the actual soil volume at each depth."
+                "For each device and soil depth, the table shows whether to add or remove water and the "
+                "approximate litres needed to reach your target VWC."
             )
             st.dataframe(rec_df)
 
@@ -1025,42 +885,36 @@ with tab_insights:
         st.markdown(
             """
             **Objective:** Identify probes that may be disconnected or malfunctioning.
-            Moisture sensors reporting 0 % (or NaN) across the selected date
-            range, or tension readings above 1 500 kPa (beyond the sensor’s
-            specified range), are flagged.  Alerts are shown below for each
-            device and sensor level.
+
+            Flags:
+            - Moisture sensors reporting 0% (or NaN) across the selected date range
+            - Tension readings with |value| > 1500 kPa (outside specified range)
             """
         )
+
         if summary_df.empty:
             st.info("No data to analyse for sensor issues.")
         else:
-            alerts = []
+            alerts: List[str] = []
             for _, row in summary_df.iterrows():
                 device = row["device"]
-                # Flag moisture sensors at 0% or missing
+
                 for i, m_col in enumerate(moisture_cols):
-                    moisture_val = row[m_col]
-                    if pd.isna(moisture_val) or moisture_val == 0:
-                        alerts.append(
-                            f"{device}: Moisture sensor level {i+1} appears disconnected or reporting 0 %."
-                        )
-                # Flag tension sensors outside valid range
+                    moisture_val = row.get(m_col, np.nan)
+                    if pd.isna(moisture_val) or float(moisture_val) == 0.0:
+                        alerts.append(f"{device}: Moisture sensor level {i+1} appears disconnected or reporting 0%.")
+
                 for i, t_col in enumerate(tension_cols):
-                    tension_val = row[t_col]
-                    if pd.isna(tension_val) or abs(tension_val) > 1500:
-                        alerts.append(
-                            f"{device}: Tensiometer level {i+1} out of range (|value| > 1500 kPa)."
-                        )
+                    tension_val = row.get(t_col, np.nan)
+                    if pd.isna(tension_val) or abs(float(tension_val)) > 1500:
+                        alerts.append(f"{device}: Tensiometer level {i+1} out of range (|value| > 1500 kPa).")
+
             if alerts:
                 for alert in alerts:
                     st.error(alert)
-                st.info(
-                    "Alerts would be emailed to v.munaldilube@uu.nl for further action."
-                )
+                st.info("Note: Alert routing/emailing is not implemented in this dashboard build.")
             else:
                 st.success("No sensor issues detected in the selected data range.")
-
-    # remove climate predictions from insights: handled in separate tab
 
 ###############################################################################
 # TAB 3: CLIMATE PREDICTIONS
@@ -1070,98 +924,81 @@ with tab_climate:
     st.markdown(
         """
         **Objective:** Use historical data to model and predict atmospheric humidity and temperature.
-        This feature fits a sinusoidal model (sine and cosine terms) for each room using the day of
-        the year as the predictor【316970089103360†L979-L984】.  Select a room and a date below to view the predicted
-        humidity and temperature for that day, and explore the predicted annual cycle.  Historical
-        observations for the selected date are also shown when available.
+
+        The model uses sine/cosine terms of day-of-year for each room (seasonal cycle).
+        Select room(s) and an experiment date range to view predicted ranges and curves.
         """
     )
+
     if not models:
         st.warning(
-            "Climate models are unavailable. Ensure that your data contains columns with 'humidity' "
-            "and 'temperature' in their names."
+            "Climate models are unavailable. Ensure your data contains columns with 'humidity' and/or 'temperature'."
         )
     else:
-        # Allow selection of one or more rooms for prediction.  Default to all available rooms.
         available_rooms = sorted(models.keys())
-        selected_rooms_pred = st.multiselect(
-            "Select room(s) for prediction", available_rooms, default=available_rooms
-        )
-        # Provide start and end dates for the experiment range.  The range applies to all selected rooms.
+        selected_rooms_pred = st.multiselect("Select room(s) for prediction", available_rooms, default=available_rooms)
+
         min_date = data["timestamp"].min().date()
-        # Default range: current date for both start and end
-        default_start = min_date
-        default_end = min_date
-        exp_start_date = st.date_input(
-            "Experiment range start date",
-            value=default_start,
-            key="exp_start_date",
-            min_value=min_date,
-        )
-        exp_end_date = st.date_input(
-            "Experiment range end date",
-            value=default_end,
-            key="exp_end_date",
-            min_value=min_date,
-        )
-        # If any rooms are selected and valid dates are provided, compute predictions for the range
+        max_date = data["timestamp"].max().date()
+
+        exp_start_date = st.date_input("Experiment range start date", value=min_date, min_value=min_date, max_value=max_date, key="exp_start_date")
+        exp_end_date = st.date_input("Experiment range end date", value=min_date, min_value=min_date, max_value=max_date, key="exp_end_date")
+
+        if exp_start_date > exp_end_date:
+            st.error("Experiment start date must be <= end date.")
+            st.stop()
+
         if selected_rooms_pred:
-            # Compute day-of-year range based on the selected experiment dates
-            try:
-                start_doy = exp_start_date.timetuple().tm_yday
-                end_doy = exp_end_date.timetuple().tm_yday
-            except Exception:
-                start_doy = 1
-                end_doy = 1
-            # Determine which days of year fall within the selected range
+            start_doy = exp_start_date.timetuple().tm_yday
+            end_doy = exp_end_date.timetuple().tm_yday
+
             if start_doy <= end_doy:
                 selected_doys = list(range(start_doy, end_doy + 1))
             else:
-                # Handle wrap-around across the end of the year
                 selected_doys = list(range(start_doy, 366)) + list(range(1, end_doy + 1))
-            # Prepare structures to collect prediction ranges and plot data
+
             range_rows = []
             plot_rows = []
+
             for room in selected_rooms_pred:
-                # Generate yearly predictions for the room
                 yearly_preds = get_predictions_over_year(room, models, seasonal_avgs)
-                # Filter by selected DOYs
                 yearly_preds_range = yearly_preds[yearly_preds["dayofyear"].isin(selected_doys)].copy()
-                # Compute ranges for humidity and temperature
+
                 hum_range = None
                 temp_range = None
-                if "humidity" in yearly_preds_range.columns and not yearly_preds_range.empty:
-                    hum_min = yearly_preds_range["humidity"].min()
-                    hum_max = yearly_preds_range["humidity"].max()
-                    hum_range = (hum_min, hum_max)
-                if "temperature" in yearly_preds_range.columns and not yearly_preds_range.empty:
-                    temp_min = yearly_preds_range["temperature"].min()
-                    temp_max = yearly_preds_range["temperature"].max()
-                    temp_range = (temp_min, temp_max)
-                # Store ranges for display
+
+                if not yearly_preds_range.empty and "humidity" in yearly_preds_range.columns:
+                    hum_min = float(np.nanmin(yearly_preds_range["humidity"].values))
+                    hum_max = float(np.nanmax(yearly_preds_range["humidity"].values))
+                    if np.isfinite(hum_min) and np.isfinite(hum_max):
+                        hum_range = (hum_min, hum_max)
+
+                if not yearly_preds_range.empty and "temperature" in yearly_preds_range.columns:
+                    temp_min = float(np.nanmin(yearly_preds_range["temperature"].values))
+                    temp_max = float(np.nanmax(yearly_preds_range["temperature"].values))
+                    if np.isfinite(temp_min) and np.isfinite(temp_max):
+                        temp_range = (temp_min, temp_max)
+
                 range_rows.append({
                     "Room": room,
-                    "Humidity Range (% RH)": f"{hum_range[0]:.2f} – {hum_range[1]:.2f}" if hum_range is not None else "N/A",
-                    "Temperature Range (°C)": f"{temp_range[0]:.2f} – {temp_range[1]:.2f}" if temp_range is not None else "N/A",
+                    "Humidity Range (% RH)": f"{hum_range[0]:.2f} – {hum_range[1]:.2f}" if hum_range else "N/A",
+                    "Temperature Range (°C)": f"{temp_range[0]:.2f} – {temp_range[1]:.2f}" if temp_range else "N/A",
                 })
-                # Prepare data for plotting
+
                 if not yearly_preds_range.empty:
-                    # For each variable, append to plot_rows
                     for var in ["humidity", "temperature"]:
                         if var in yearly_preds_range.columns:
                             df_var = yearly_preds_range[["dayofyear", var]].copy().rename(columns={var: "Value"})
                             df_var["Variable"] = var
                             df_var["Room"] = room
                             plot_rows.append(df_var)
-            # Display the range table
+
             if range_rows:
-                range_df = pd.DataFrame(range_rows)
                 st.subheader("Predicted ranges for selected rooms")
-                st.dataframe(range_df)
-            # Plot predictions for all selected rooms and variables
+                st.dataframe(pd.DataFrame(range_rows))
+
             if plot_rows:
                 plot_df = pd.concat(plot_rows, ignore_index=True)
-                # Plot humidity and temperature separately for clarity
                 for var in ["humidity", "temperature"]:
                     df_var = plot_df[plot_df["Variable"] == var]
                     if not df_var.empty:
@@ -1172,15 +1009,17 @@ with tab_climate:
                             color="Room",
                             title=f"Predicted {var} for selected rooms (day {start_doy} to {end_doy})",
                         )
-                        fig.update_layout(xaxis_title="Day of Year", yaxis_title=f"Predicted {var}")
+                        fig.update_layout(
+                            xaxis_title="Day of Year",
+                            yaxis_title=f"Predicted {var}",
+                        )
                         st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No predicted values available for the selected range and rooms.")
-            # Disclaimer regarding prediction accuracy
+
             st.caption(
-                "\n*Note: The climate model was trained on historical data where many rooms were not running at full "
-                "power simultaneously. Predictions may therefore deviate from actual conditions when multiple "
-                "rooms are active concurrently. Use the predicted ranges as guidance rather than exact forecasts.*"
+                "*Note: Predictions are based on historical conditions and seasonal averaging + sinusoidal fallback. "
+                "Use predicted ranges as guidance rather than exact forecasts.*"
             )
 
 ###############################################################################
