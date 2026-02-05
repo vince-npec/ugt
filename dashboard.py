@@ -16,23 +16,7 @@ columns containing the words "humidity" and "temperature" to build the
 models, so it works with a variety of sensor naming conventions.
 """
 
-"""
-Extended Streamlit dashboard for NPEC Ecotrons.
 
-This file is based on the original NPEC Ecotron visualization dashboard and
-adds a new insights task for climate prediction.
-
-SECURITY NOTE
--------------
-A sidebar password can optionally lock ONLY the sidebar device/camera menu.
-The main dashboard content must always remain visible.
-
-Provide the password via:
-- Streamlit secrets: st.secrets["SIDEBAR_PASS"]
-- Environment variable: SIDEBAR_PASS
-
-If no password is provided, the sidebar menu is unlocked by default.
-"""
 
 import os
 import re
