@@ -428,32 +428,191 @@ def looks_like_data_point(col) -> bool:
     return False
 
 
+# -----------------------------------------------------------------------------
+# Robust regression helpers (prevents np.linalg.LinAlgError from np.polyfit)
+# -----------------------------------------------------------------------------
+DERIVE_FIT_DEBUG = False  # set True to print fallback info to logs
+
+
+def _sanitize_xy_for_fit(
+    x_series: pd.Series,
+    y_series: pd.Series,
+    *,
+    x_min: float = -1.0,
+    x_max: float = 101.0,
+    y_min: float = -200.0,
+    y_max: float = 2000.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Convert x/y to float arrays and remove NaN/inf plus obviously invalid ranges.
+
+    Defaults are conservative:
+    - Moisture content (VWC %) should be ~0..100
+    - Tension (kPa) typically within about -100..1500; we allow a bit wider for filtering
+    """
+    x = pd.to_numeric(x_series, errors="coerce").astype(float).to_numpy()
+    y = pd.to_numeric(y_series, errors="coerce").astype(float).to_numpy()
+
+    # Drop NaN/inf on both sides
+    m = np.isfinite(x) & np.isfinite(y)
+    x = x[m]
+    y = y[m]
+
+    if x.size == 0:
+        return x, y
+
+    # Drop values outside plausible physical limits (helps avoid numerical issues)
+    m2 = (x >= x_min) & (x <= x_max) & (y >= y_min) & (y <= y_max)
+    return x[m2], y[m2]
+
+
+def _clip_outliers_quantile(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    q_low: float = 0.01,
+    q_high: float = 0.99,
+    min_points: int = 10,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Optional: remove extreme outliers using quantile clipping.
+    Only activates when there are enough points.
+    """
+    if x.size < min_points:
+        return x, y
+
+    # Quantiles can fail if all values identical; guard with try/except
+    try:
+        x_lo, x_hi = np.quantile(x, [q_low, q_high])
+        y_lo, y_hi = np.quantile(y, [q_low, q_high])
+    except Exception:
+        return x, y
+
+    m = (x >= x_lo) & (x <= x_hi) & (y >= y_lo) & (y <= y_hi)
+    # Only accept clipping if we still have enough points
+    if m.sum() >= max(3, min_points // 2):
+        return x[m], y[m]
+    return x, y
+
+
+def _linear_fit_closed_form(x: np.ndarray, y: np.ndarray, *, eps: float = 1e-12) -> tuple[float, float]:
+    """
+    Closed-form simple linear regression:
+        slope = cov(x,y)/var(x)
+        intercept = mean(y) - slope*mean(x)
+
+    No SVD, no lstsq => avoids LinAlgError.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    xm = float(x.mean())
+    ym = float(y.mean())
+    dx = x - xm
+
+    denom = float(np.dot(dx, dx))
+    if denom <= eps:
+        raise ValueError("Degenerate x (variance too small)")
+
+    slope = float(np.dot(dx, (y - ym)) / denom)
+    intercept = float(ym - slope * xm)
+    return slope, intercept
+
+
 def derive_tension_targets(
     data: pd.DataFrame,
     moisture_cols: List[str],
     tension_cols: List[str],
     moisture_targets: Dict[str, float],
 ) -> Dict[str, float]:
-    """Compute target tension for each level based on moisture targets."""
-    targets: Dict[str, float] = {}
-    for i, m_col in enumerate(sorted(moisture_cols)):
-        if i >= len(sorted(tension_cols)):
-            break
-        t_col = sorted(tension_cols)[i]
-        x = pd.to_numeric(data[m_col], errors="coerce")
-        y = pd.to_numeric(data[t_col], errors="coerce")
-        mask = (~x.isna()) & (~y.isna())
-        if mask.sum() > 1:
-            slope, intercept = np.polyfit(x[mask], y[mask], 1)
-        else:
-            slope = -2.0
-            med = np.nanmedian(y.values)
-            intercept = float(med) if np.isfinite(med) else 0.0
+    """
+    Compute target tension for each level based on moisture targets.
 
-        predicted = intercept + slope * float(moisture_targets.get(m_col, 0.0))
-        predicted = float(max(-100.0, min(1500.0, predicted)))
+    Robust behavior:
+    - Removes NaN/inf and invalid ranges
+    - Avoids polyfit/lstsq (no SVD convergence failures)
+    - Falls back safely for small/flat/noisy datasets
+    - Returns a value for every tension column (prevents downstream KeyError)
+    """
+    targets: Dict[str, float] = {}
+
+    m_sorted = sorted(moisture_cols)
+    t_sorted = sorted(tension_cols)
+
+    # How many levels can we pair moisture<->tension by index?
+    n_pairs = min(len(m_sorted), len(t_sorted))
+
+    for i in range(n_pairs):
+        m_col = m_sorted[i]
+        t_col = t_sorted[i]
+
+        # Clean and validate data used for the fit
+        x, y = _sanitize_xy_for_fit(data[m_col], data[t_col])
+
+        # Fallback intercept = median tension (from cleaned y)
+        if y.size > 0:
+            med = float(np.median(y))
+            fallback_intercept = med if np.isfinite(med) else 0.0
+        else:
+            fallback_intercept = 0.0
+
+        fallback_slope = -2.0  # your historical default assumption
+
+        # Default fit result
+        slope, intercept = fallback_slope, fallback_intercept
+
+        # Only attempt a fit with enough points and non-flat moisture
+        if x.size >= 3 and float(np.std(x)) >= 1e-6:
+            # Optional outlier clipping to prevent spikes killing the fit
+            x2, y2 = _clip_outliers_quantile(x, y)
+
+            # Fit (closed form; cannot throw LinAlgError)
+            try:
+                slope, intercept = _linear_fit_closed_form(x2, y2)
+                if not (np.isfinite(slope) and np.isfinite(intercept)):
+                    slope, intercept = fallback_slope, fallback_intercept
+            except Exception as e:
+                if DERIVE_FIT_DEBUG:
+                    print(f"[derive_tension_targets] Fit failed for {m_col} vs {t_col}: {e}. Using fallback.")
+                slope, intercept = fallback_slope, fallback_intercept
+        else:
+            if DERIVE_FIT_DEBUG:
+                print(
+                    f"[derive_tension_targets] Not enough/usable points for {m_col} vs {t_col} "
+                    f"(n={x.size}, std={float(np.std(x)) if x.size else 0.0}). Using fallback."
+                )
+
+        # Use user-provided moisture target; fallback to median x if missing
+        target_m = moisture_targets.get(m_col, None)
+        if target_m is None or not np.isfinite(float(target_m)):
+            if x.size > 0:
+                target_m = float(np.median(x))
+            else:
+                target_m = 0.0
+        else:
+            target_m = float(target_m)
+
+        predicted = float(intercept + slope * target_m)
+
+        # Clamp to physical range
+        predicted = float(np.clip(predicted, -100.0, 1500.0))
         targets[t_col] = predicted
+
+    # Guarantee a target for every tension column (prevents KeyError downstream)
+    for t_col in t_sorted:
+        if t_col in targets:
+            continue
+        y_raw = pd.to_numeric(data[t_col], errors="coerce").astype(float).to_numpy()
+        y_raw = y_raw[np.isfinite(y_raw)]
+        if y_raw.size > 0:
+            med = float(np.median(y_raw))
+            predicted = med if np.isfinite(med) else 0.0
+        else:
+            predicted = 0.0
+        targets[t_col] = float(np.clip(predicted, -100.0, 1500.0))
+
     return targets
+
 
 
 ###############################################################################
